@@ -1,204 +1,341 @@
-#!/usr/bin/env python3
-
 import cv2
-
-import numpy as np
-
 import time
-
-from picamera2 import Picamera2
-
+import os
 import serial
+from collections import deque, Counter
+from object_detection import detect_objects, stop_camera
+# -------------------
+ser = serial.Serial('/dev/ttyACM0', 9600, timeout=0.1)
+
+time.sleep(2)
+
+print("✅ Serial connected")
+
+ser.write(b"START\n")
+
+time.sleep(1)
+# -------------------
+SAVE_PATH = "/home/gp/self_driving_car/output_frames"
+os.makedirs(SAVE_PATH, exist_ok=True)
+
+frame_count = 0
 
 
+# ------------------- Stability -------------------
+history = deque(maxlen=10)
 
-# ---------------- Picamera2 setup ----------------
+def get_stable_detection(history):
 
-picam2 = Picamera2()
+    flat = [item for sublist in history for item in sublist]
 
-picam2.configure(picam2.create_preview_configuration(main={"format": "RGB888", "size": (800, 600)}))
+    if not flat:
+        return None
 
-picam2.start()
+    return Counter(flat).most_common(1)[0][0]
 
-time.sleep(2)  # allow camera to warm up
+# ------------------- State -------------------
+last_action_time = 0
+ACTION_COOLDOWN = 1.0
 
+stop_until = 0
+ignore_until = 0
+current_action = "FORWARD"
 
+is_stopping = False
 
-# ---------------- Arduino serial ----------------
+# ------------------- Ultrasonic distances -------------------
+#left_dist = 999
+center_dist = 999
+#right_dist = 999
 
-ser = serial.Serial('/dev/ttyACM0', 9600)
+# ============================================================
+try:
 
-time.sleep(2)  # wait for Arduino to initialize
+    while True:
 
+        # ========================================================
+        # READ DISTANCE FROM ARDUINO
+        # ========================================================
+        while ser.in_waiting:
 
+            try:
+                line = ser.readline().decode().strip()
 
-# ✅ RESET motors (STOP car at startup)
+                # Expected:
+                # DISTANCE: 23.5 cm
+                if "DISTANCE:" in line:
 
-ser.write(b"L000R000\n")
+                    value = line.replace("DISTANCE:", "")
+                    value = value.replace("cm", "")
+                    value = value.strip()
 
-time.sleep(1)  # small delay to ensure command is applied
+                    center_dist = float(value)
+            except:
+                pass
 
+        frame, detections = detect_objects()
 
+        detected_classes = []
+        detected_objects = []
 
-# ---------------- Lane detection params ----------------
+        for detection in detections:
 
-frame_width = 800
+            x1, y1, x2, y2 = detection["box"]
 
-frame_height = 600
+            name = detection["name"]
 
-base_speed = 100  # base PWM speed
+            conf = detection["conf"]
 
-Kp = 0.8      # proportional gain
+            detected_classes.append(name)
 
-expected_lane_width = 200  # pixels, approximate width between lanes
+            dist = center_dist
 
-prev_lane_center = frame_width / 2  # initialize lane center
+            detected_objects.append((name, dist))
 
+            cv2.rectangle(
+                frame,
+                (x1, y1),
+                (x2, y2),
+                (0, 255, 0),
+                2
+            )
 
+            cv2.putText(
+                frame,
+                f"{name}, {conf:.1f}, {dist:.1f}cm",
+                (x1, y1 - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 0),
+                1
+            )
 
-def getFrame():
+        # ========================================================
+        # STABILITY
+        # ========================================================
+        history.append(detected_classes)
 
-    img = picam2.capture_array()
+        stable_object = get_stable_detection(history)
 
-    img = cv2.resize(img, (frame_width, frame_height))
+        # ========================================================
+        # CLOSEST OBJECT
+        # ========================================================
+        closest_obj = None
 
-    return img
+        min_dist = 999
 
+        for name, dist in detected_objects:
 
+            if dist < min_dist:
 
-while True:
+                min_dist = dist
 
-    img = getFrame()
+                closest_obj = name
 
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        now = time.time()
 
-    blur = cv2.GaussianBlur(gray, (5,5), 0)
+        # ========================================================
+        # ACTION LOGIC
+        # ========================================================
+        if now < stop_until:
 
+            action = "STOP"
+
+        else:
+
+            if is_stopping:
+                is_stopping = False
+
+            action = "FORWARD"
+
+            if closest_obj:
+
+                # =================================================
+                # STOP SIGN / RED
+                # =================================================
+                if closest_obj in ["stop-sign", "red"]:
+
+                    # Ignore repeated stopping
+                    if now > ignore_until:
+
+                        if min_dist <= 20:
+
+                            action = "STOP"
+
+                            if not is_stopping:
+
+                                stop_until = now + 3
+
+                                # Ignore stop sign for 5 sec
+                                ignore_until = now + 5
+
+                                is_stopping = True
+
+                        else:
+                            action = "FORWARD_SLOW"
+
+                    else:
+                        # After stop finishes -> move again
+                        action = "FORWARD"
+
+                # =================================================
+                # YELLOW
+                # =================================================
+                elif closest_obj == "yellow":
+
+                    if min_dist < 25:
+                        action = "FORWARD_SLOW"
+
+                # =================================================
+                # GREEN
+                # =================================================
+                elif closest_obj == "green":
+
+                    action = "FORWARD"
+
+                # =================================================
+                # OBSTACLE
+                # =================================================
+                elif closest_obj in ["lego", "toy-car"]:
+
+                    if min_dist <= 20:
+
+                        action = "STOP"
+
+                        #if not is_stopping:
+
+                            #stop_until = now + 1.5
+
+                            #is_stopping = True
+
+                    elif min_dist <= 30:
+
+                        action = "FORWARD_SLOW"
+
+                    else:
+                        action = "FORWARD"
+                  
+            else:     
+                      
+                if center_dist <= 20:
+
+                    action = "STOP"
+
+                elif center_dist <= 30:
+
+                    action = "FORWARD"
+                            
+
+        # ========================================================
+        # COOLDOWN
+        # ========================================================
+        #if now - last_action_time < ACTION_COOLDOWN:
+
+         #   action = current_action
+
+        #else:
+
+        current_action = action
+
+            #last_action_time = now
+
+        # ========================================================
+        # SEND MOTOR COMMAND
+        # ========================================================
+        if current_action == "STOP":
+
+            ser.write(b"L000R000\n")
+
+        elif current_action == "FORWARD":
+
+            ser.write(b"L150R150\n")
+
+        elif current_action == "FORWARD_SLOW":
+
+            ser.write(b"L110R110\n")
+
+        elif current_action == "SLOW":
+
+            ser.write(b"L060R060\n")
+
+        # ========================================================
+        # DEBUG
+        # ========================================================
+        cv2.putText(
+            frame,
+            f"ACTION: {current_action}",
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1,
+            (0, 0, 255),
+            2
+        )
+
+        cv2.putText(
+            frame,
+            f"{closest_obj} {min_dist:.1f}cm",
+            (20, 80),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 0, 0),
+            2
+        )
+
+        cv2.putText(
+            frame,
+            f"C:{center_dist:.0f}",
+            (20, 120),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 255, 255),
+            2
+        )
+
+        print(
+            "Closest:",
+            closest_obj,
+            "| Dist:",
+            min_dist,
+            "| Action:",
+            current_action
+        )
+
+        # ========================================================
+        # SAVE
+        # ========================================================
+        if detected_classes:
+
+            filename = f"{SAVE_PATH}/frame_{frame_count}.jpg"
+
+            #cv2.imwrite(filename, frame)
+
+        frame_count += 1
+
+        cv2.imshow("YOLO + Ultrasonic", frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+        time.sleep(0.03)
+except KeyboardInterrupt:
+
+    print("\nStopping car...")
+
+finally:
+
+    # Send STOP command to Arduino
+    try:
+        ser.write(b"L000R000\n")
+        time.sleep(0.5)
+    except:
+        pass
+
+    stop_camera()
     
+    cv2.destroyAllWindows()
 
-    # Threshold: white lane lines
+    ser.close()
 
-    ret, thresh = cv2.threshold(blur, 240, 255, cv2.THRESH_BINARY)
+    print("Program terminated safely")
 
-    
-
-    # Focus on lower half of frame
-
-    roi = thresh[frame_height//2:, :]
-
-    
-
-    # Hough lines
-
-    lines = cv2.HoughLinesP(roi, 1, np.pi/180, 20, minLineLength=20, maxLineGap=30)
-
-    
-
-    left_x = []
-
-    right_x = []
-
-    
-
-    if lines is not None:
-
-        for line in lines:
-
-            x1, y1, x2, y2 = line[0]
-
-            slope = (y2 - y1) / (x2 - x1 + 1e-6)  # avoid divide by zero
-
-            if slope < -0.3:  # left line
-
-                left_x.extend([x1, x2])
-
-                cv2.line(img, (x1, y1 + frame_height//2), (x2, y2 + frame_height//2), (255,0,0), 2)
-
-            elif slope > 0.3:  # right line
-
-                right_x.extend([x1, x2])
-
-                cv2.line(img, (x1, y1 + frame_height//2), (x2, y2 + frame_height//2), (0,0,255), 2)
-
-    
-
-    # ---------------- Compute lane center with fallback ----------------
-
-    if left_x and right_x:
-
-        left_avg = np.mean(left_x)
-
-        right_avg = np.mean(right_x)
-
-        lane_center = (left_avg + right_avg) / 2
-
-    elif left_x:  # only left line detected
-
-        left_avg = np.mean(left_x)
-
-        lane_center = left_avg + expected_lane_width / 2
-
-    elif right_x:  # only right line detected
-
-        right_avg = np.mean(right_x)
-
-        lane_center = right_avg - expected_lane_width / 2
-
-    else:  # no lines detected
-
-        lane_center = prev_lane_center  # use previous lane center
-
-    
-
-    # Smooth lane center to reduce jitter
-
-    lane_center = 0.8 * prev_lane_center + 0.2 * lane_center
-
-    prev_lane_center = lane_center
-
-    
-
-    # ---------------- Compute motor speeds ----------------
-
-    error = lane_center - frame_width / 2
-
-    turn = int(Kp * error)
-
-    left_pwm = max(0, min(255, base_speed - turn))
-
-    right_pwm = max(0, min(255, base_speed + turn))
-
-    
-
-    # Send to Arduino
-
-    command = f"L{left_pwm:03d}R{right_pwm:03d}\n"
-
-    ser.write(command.encode())
-
-    
-
-    # Draw lane center
-
-    cv2.line(img, (int(lane_center), frame_height//2), (int(lane_center), frame_height), (0,255,0), 2)
-
-    
-
-    # Show windows for debugging
-
-    cv2.imshow('img', img)
-
-    cv2.imshow('thresh', thresh)
-
-    
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-
-        break
-
-
-
-cv2.destroyAllWindows()
-
-ser.close()
 

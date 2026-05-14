@@ -120,7 +120,36 @@ while True:
 
                 cv2.line(img, (x1, y1 + frame_height//2), (x2, y2 + frame_height//2), (0,0,255), 2)
 
-    
+
+    # Separate lines AND compute their position
+    # left_lines = []
+    # right_lines = []
+
+    # center_x = frame_width / 2
+
+    # if lines is not None:
+    #     for line in lines:
+    #         x1, y1, x2, y2 = line[0]
+    #         slope = (y2 - y1) / (x2 - x1 + 1e-6)
+
+    #         mid_x = (x1 + x2) / 2  # line position
+
+    #         if slope < -0.3:  # left lane candidates
+    #             left_lines.append((mid_x, x1, y1, x2, y2))
+
+    #         elif slope > 0.3:  # right lane candidates
+    #             right_lines.append((mid_x, x1, y1, x2, y2))
+
+    # left_line = None
+    # right_line = None
+    # # Select the closest line to center on each side
+    # if left_lines:
+    #     left_line = max(left_lines, key=lambda l: l[0])  
+    #     # closest to center from left → largest x
+
+    # if right_lines:
+    #     right_line = min(right_lines, key=lambda l: l[0])  
+    # closest to center from right → smallest x             
 
     # ---------------- Compute lane center with fallback ----------------
 
@@ -148,13 +177,26 @@ while True:
 
         lane_center = prev_lane_center  # use previous lane center
 
-    
+    # Compute lane center using ONLY these two
+    # if left_line and right_line:
+    #     left_x = left_line[0]
+    #     right_x = right_line[0]
+    #     lane_center = (left_x + right_x) / 2
 
-    # Smooth lane center to reduce jitter
+    # elif left_line:
+    #     lane_center = left_line[0] + expected_lane_width / 2
 
-    lane_center = 0.8 * prev_lane_center + 0.2 * lane_center
+    # elif right_line:
+    #     lane_center = right_line[0] - expected_lane_width / 2
 
-    prev_lane_center = lane_center
+    # else:
+    #     lane_center = prev_lane_center
+
+    # # Smooth lane center to reduce jitter
+
+    # lane_center = 0.8 * prev_lane_center + 0.2 * lane_center
+
+    # prev_lane_center = lane_center
 
     
 

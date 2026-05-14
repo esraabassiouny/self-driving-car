@@ -13,7 +13,6 @@ int right_speed = 0;
 void setup() {
   Serial.begin(9600);
 
-  // Set motor pins as outputs
   pinMode(IN1, OUTPUT);
   pinMode(IN2, OUTPUT);
   pinMode(IN3, OUTPUT);
@@ -21,6 +20,10 @@ void setup() {
 
   pinMode(enA, OUTPUT);
   pinMode(enB, OUTPUT);
+
+  // 🛑 STOP motors at startup
+  analogWrite(enA, 0);
+  analogWrite(enB, 0);
 }
 
 void loop() {
