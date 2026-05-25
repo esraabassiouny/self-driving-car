@@ -23,14 +23,12 @@ int left_speed = 0;
 int right_speed = 0;
 
 // --------------------
-// Servo scan angles
+// Radar sweep
 // --------------------
-int leftAngle = 30;
-int centerAngle = 90;
-int rightAngle = 150;
+int servoAngle = 20;
+int servoStep = 5;
 
-// --------------------
-bool scanEnabled = false;
+bool objectDetected = false;
 
 long duration;
 float distance;
@@ -59,18 +57,6 @@ float readDistance() {
 }
 
 // =====================================================
-// Scan direction
-// =====================================================
-float scanDirection(int angle) {
-
-  myServo.write(angle);
-
-  delay(360);
-
-  return readDistance();
-}
-
-// =====================================================
 void setup() {
 
   Serial.begin(9600);
@@ -88,7 +74,7 @@ void setup() {
   pinMode(enA, OUTPUT);
   pinMode(enB, OUTPUT);
 
-  // Stop motors
+  // Stop motors initially
   analogWrite(enA, 0);
   analogWrite(enB, 0);
 
@@ -97,14 +83,16 @@ void setup() {
 
   myServo.write(90);
 
-  Serial.println("WAITING_START");
+  Serial.println("SYSTEM_READY");
 }
 
 // =====================================================
 void loop() {
 
   // =================================================
-  // RECEIVE COMMANDS
+  // RECEIVE MOTOR COMMANDS FROM RASPBERRY PI
+  // Format:
+  // L150R150
   // =================================================
   if (Serial.available()) {
 
@@ -112,21 +100,6 @@ void loop() {
 
     cmd.trim();
 
-    // =============================================
-    // START scanning
-    // =============================================
-    if (cmd == "START") {
-
-      scanEnabled = true;
-
-      Serial.println("SCAN_STARTED");
-    }
-
-    // =============================================
-    // MOTOR COMMANDS
-    // Format:
-    // L150R150
-    // =============================================
     int lIndex = cmd.indexOf('L');
     int rIndex = cmd.indexOf('R');
 
@@ -153,29 +126,42 @@ void loop() {
   analogWrite(enB, right_speed);
 
   // =================================================
-  // SCANNING
+  // RADAR SWEEP
   // =================================================
-  if (scanEnabled) {
+  myServo.write(servoAngle);
 
-    float leftDist =
-      scanDirection(leftAngle);
+  delay(25);
 
-    float centerDist =
-      scanDirection(centerAngle);
+  float dist = readDistance();
 
-    float rightDist =
-      scanDirection(rightAngle);
+  // =================================================
+  // SEND DISTANCE TO RASPBERRY PI
+  // =================================================
+  Serial.print("DIST:");
+  Serial.println(dist);
 
-    // Send to Raspberry Pi
-    Serial.print("LEFT:");
-    Serial.print(leftDist);
+  // =================================================
+  // OBJECT DETECTION
+  // =================================================
+  if (dist < 80) {
 
-    Serial.print(",CENTER:");
-    Serial.print(centerDist);
+    objectDetected = true;
 
-    Serial.print(",RIGHT:");
-    Serial.println(rightDist);
+  } else {
+
+    objectDetected = false;
   }
 
-  delay(60);
+  // =================================================
+  // MOVE SERVO ONLY IF NO OBJECT
+  // =================================================
+  if (!objectDetected) {
+
+    servoAngle += servoStep;
+
+    // Reverse direction
+    if (servoAngle >= 140 || servoAngle <= 20) {
+      servoStep = -servoStep;
+    }
+  }
 }

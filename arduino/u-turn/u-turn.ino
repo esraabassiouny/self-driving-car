@@ -129,47 +129,5 @@ void setup() {
 // =====================================================
 
 void loop() {
-
-  // ==========================================
-  // READ SERIAL COMMAND
-  // ==========================================
-
-  if (Serial.available()) {
-
-    String cmd = Serial.readStringUntil('\n');
-
-    cmd.trim();
-
-    // ==========================================
-    // SPECIAL COMMAND:
-    // UTURN_LEFT
-    // ==========================================
-
-    if (cmd == "UTURN_LEFT") {
-
-      uTurnLeft();
-    }
-
-    // ==========================================
-    // NORMAL MOTOR COMMAND:
-    // FORMAT -> L120R140
-    // ==========================================
-
-    else {
-
-      int lIndex = cmd.indexOf('L');
-      int rIndex = cmd.indexOf('R');
-
-      if (lIndex != -1 && rIndex != -1) {
-
-        left_speed =
-          cmd.substring(lIndex + 1, rIndex).toInt();
-
-        right_speed =
-          cmd.substring(rIndex + 1).toInt();
-
-        forward(left_speed, right_speed);
-      }
-    }
-  }
+uTurnLeft();
 }
