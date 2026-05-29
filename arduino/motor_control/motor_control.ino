@@ -157,19 +157,24 @@ void loop() {
 
     else {
 
-      int lIndex = cmd.indexOf('L');
-      int rIndex = cmd.indexOf('R');
+  int lIndex = cmd.indexOf('L');
+  int rIndex = cmd.indexOf('R');
 
-      if (lIndex != -1 && rIndex != -1) {
+  if (lIndex != -1 && rIndex != -1) {
 
-        left_speed =
-          cmd.substring(lIndex + 1, rIndex).toInt();
+    left_speed =
+      cmd.substring(lIndex + 1, rIndex).toInt();
 
-        right_speed =
-          cmd.substring(rIndex + 1).toInt();
+    right_speed =
+      cmd.substring(rIndex + 1).toInt();
 
-        forward(left_speed, right_speed);
-      }
-    }
+    forward(left_speed, right_speed);
+    // delay(700);
+    Serial.print("ACK:");
+    Serial.print(left_speed);
+    Serial.print(",");
+    Serial.println(right_speed);
+  }
+  }
   }
 }
