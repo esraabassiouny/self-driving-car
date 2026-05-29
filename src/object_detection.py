@@ -4,13 +4,13 @@ import cv2
 import numpy as np
 import time
 
-MODEL_PATH = "/home/gp/self_driving_car/models/best.onnx"
-TARGET_SIZE = (416, 416)
+MODEL_PATH = "/home/gp/self_driving_car/models/best_ncnn_model"
+TARGET_SIZE = (800, 600)
 
 # =========================
 # LOAD MODEL
 # =========================
-model = YOLO(MODEL_PATH)
+model = YOLO(MODEL_PATH, task="detect")
 
 # =========================
 # CAMERA
