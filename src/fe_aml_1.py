@@ -15,11 +15,11 @@ time.sleep(3)  # wait for Arduino to initialize
 # ---------------------------
 def perspective_transform(img):
     h, w = img.shape[:2]
-    #     src = np.float32([
-    #     [w*0.37, h*0.68],   # top-left
+    # src = np.float32([
+    #     [w*0.42, h*0.68],   # top-left
     #     [w*0.67, h*0.68],   # top-right
     #     [w*0.76, h*0.98],   # bottom-right
-    #     [w*0.28, h*0.98]    # bottom-left
+    #     [w*0.33, h*0.98]    # bottom-left
     # ])
  
     
@@ -29,11 +29,13 @@ def perspective_transform(img):
     #     [w*0.88, h],     # bottom-right
     #     [w*0.12, h]      # bottom-left
     # ])
-    src = np.float32([
-        [w*0.27, h*0.78],   # top-left
-        [w*0.80, h*0.78],   # top-right
-        [w*0.83, h*0.98],   # bottom-right
-        [w*0.23, h*0.98]    # bottom-left
+
+    # wider from left >> worked better 
+	src = np.float32([
+        [w*0.37, h*0.68],   # top-left
+        [w*0.67, h*0.68],   # top-right
+        [w*0.76, h*0.98],   # bottom-right
+        [w*0.28, h*0.98]    # bottom-left
     ])
  
     
@@ -43,6 +45,23 @@ def perspective_transform(img):
         [w*0.88, h],     # bottom-right
         [w*0.12, h]      # bottom-left
     ])
+
+    #shorter >> worked best
+
+    #     src = np.float32([
+    #     [w*0.27, h*0.78],   # top-left
+    #     [w*0.80, h*0.78],   # top-right
+    #     [w*0.83, h*0.98],   # bottom-right
+    #     [w*0.23, h*0.98]    # bottom-left
+    # ])
+ 
+    
+    # dst = np.float32([
+    #     [w*0.12, 0],     # top-left
+    #     [w*0.88, 0],     # top-right
+    #     [w*0.88, h],     # bottom-right
+    #     [w*0.12, h]      # bottom-left
+    # ])
     debug = img.copy()
 
     pts = np.array(src, np.int32)
@@ -331,8 +350,7 @@ def compute_steering(left_fit, right_fit, shape):
     h, w = shape[:2]
 
     # Evaluate further up the image to look ahead (anticipate curves)
-    #ys = [h * 0.55, h * 0.65, h * 0.75]
-    ys = [h * 0.75]
+    ys = [h * 0.55, h * 0.65, h * 0.75]
     lane_centers = []
 
     for y in ys:

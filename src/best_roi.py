@@ -15,12 +15,13 @@ time.sleep(2)  # wait for Arduino to initialize
 # ---------------------------
 def perspective_transform(img):
     h, w = img.shape[:2]
-# best 
+     
+
     src = np.float32([
-        [w*0.22, h*0.78],   # top-left
-        [w*0.85, h*0.78],   # top-right
-        [w*0.88, h*0.95],   # bottom-right
-        [w*0.18, h*0.95]    # bottom-left
+        [w*0.17, h*0.78],   # top-left
+        [w*0.90, h*0.78],   # top-right
+        [w*0.93, h*0.98],   # bottom-right
+        [w*0.13, h*0.98]    # bottom-left
     ])
  
     
@@ -30,6 +31,7 @@ def perspective_transform(img):
         [w*0.88, h],     # bottom-right
         [w*0.12, h]      # bottom-left
     ])
+
     debug = img.copy()
 
     pts = np.array(src, np.int32)
@@ -41,6 +43,7 @@ def perspective_transform(img):
     Minv = np.linalg.inv(M)
 
     warped = cv2.warpPerspective(img, M, (w, h))
+    cv2.imshow("Warped", warped)
     return warped, Minv
 
 
@@ -49,6 +52,7 @@ def perspective_transform(img):
 # ---------------------------
 def threshold_white(img):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    #cv2.imshow("hsv", hsv)
 
     lower_white = np.array([0, 0, 200])
     upper_white = np.array([180, 40, 255])
@@ -116,7 +120,8 @@ def sliding_window(binary_warped):
             nonzerox[right_lane_inds], nonzeroy[right_lane_inds])
 
 # try max_adjust 130 -140 
-def compute_pwm(error, base_speed=135, max_adjust=130):
+# base_speed 135
+def compute_pwm(error, base_speed=120, max_adjust=130):
 
     # More sensitive steering
     error = np.clip(error, -80, 80)
@@ -157,12 +162,22 @@ def compute_steering(left_fit, right_fit, shape):
 
     h, w = shape[:2]
 
-    #y = h - 1
-    y = int(h * 0.75)
-    left_x = np.polyval(left_fit, y)
-    right_x = np.polyval(right_fit, y)
+    # y = h - 1
+    # y = int(h * 0.75)
 
-    lane_center = (left_x + right_x) / 2
+    # left_x = np.polyval(left_fit, y)
+    # right_x = np.polyval(right_fit, y)
+    # lane_center = (left_x + right_x) / 2
+
+    ys = [h * 0.7, h * 0.8, h * 0.9]
+    lane_centers = []
+
+    for y in ys:
+        lx = np.polyval(left_fit, y)
+        rx = np.polyval(right_fit, y)
+        lane_centers.append((lx + rx) / 2)
+
+    lane_center = np.mean(lane_centers)
 
     # tune this manually later
     car_center = 400
@@ -267,6 +282,7 @@ try:
 
         warped, Minv = perspective_transform(frame)
         mask = threshold_white(warped)
+        cv2.imshow("Mask", mask)
         lane_end_detected = detect_lane_end(mask)
         if lane_end_detected:
 
@@ -291,7 +307,7 @@ try:
                 continue
                 
         w = mask.shape[1]
-        mask[:, :int(w*0.22)] = 0
+        #mask[:, :int(w*0.22)] = 0
 
         left_fit, right_fit = fit_polynomial(mask)
 
@@ -342,7 +358,7 @@ try:
         print(command)
 
         cv2.imshow("Lane Following", result)
-        cv2.imshow("Mask", mask)
+        #cv2.imshow("Mask", mask)
 
         if cv2.waitKey(1) == 27:
             break
@@ -367,3 +383,25 @@ cv2.destroyAllWindows()
 picam2.stop()
 
 ser.close()
+
+
+    
+
+
+
+
+    #     src = np.float32([
+    #     [w*0.37, h*0.68],   # top-left
+    #     [w*0.67, h*0.68],   # top-right
+    #     [w*0.76, h*0.98],   # bottom-right
+    #     [w*0.28, h*0.98]    # bottom-left
+    # ])
+ 
+    
+    # dst = np.float32([
+    #     [w*0.12, 0],     # top-left
+    #     [w*0.88, 0],     # top-right
+    #     [w*0.88, h],     # bottom-right
+    #     [w*0.12, h]      # bottom-left
+    # ])
+	

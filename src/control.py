@@ -44,9 +44,9 @@ current_action = "FORWARD"
 is_stopping = False
 
 # ------------------- Ultrasonic distances -------------------
-#left_dist = 999
+left_dist = 999
 center_dist = 999
-#right_dist = 999
+right_dist = 999
 
 # ============================================================
 try:
@@ -54,24 +54,30 @@ try:
     while True:
 
         # ========================================================
-        # READ DISTANCE FROM ARDUINO
+        # READ DISTANCES FROM ARDUINO
+        # Expected:
+        # LEFT:23,CENTER:45,RIGHT:18
         # ========================================================
+        min_dist = 999
+
         while ser.in_waiting:
 
             try:
                 line = ser.readline().decode().strip()
 
-                # Expected:
-                # DISTANCE: 23.5 cm
-                if "DISTANCE:" in line:
+                if "DIST:" in line:
 
-                    value = line.replace("DISTANCE:", "")
-                    value = value.replace("cm", "")
-                    value = value.strip()
+                    min_dist = float(
+                        line.replace("DIST:", "").strip()
+                    )
 
-                    center_dist = float(value)
-            except:
-                pass
+                    print("Min Distance:", min_dist)
+
+            except Exception as e:
+                print("Parse Error:", e)
+
+
+
 
         frame, detections = detect_objects()
 
@@ -88,7 +94,7 @@ try:
 
             detected_classes.append(name)
 
-            dist = center_dist
+            dist = min_dist
 
             detected_objects.append((name, dist))
 
@@ -153,12 +159,12 @@ try:
                 # =================================================
                 # STOP SIGN / RED
                 # =================================================
-                if closest_obj in ["stop-sign", "red"]:
+                if closest_obj in ["red"]:
 
                     # Ignore repeated stopping
                     if now > ignore_until:
 
-                        if min_dist <= 20:
+                        if min_dist <= 30:
 
                             action = "STOP"
 
@@ -196,9 +202,9 @@ try:
                 # =================================================
                 # OBSTACLE
                 # =================================================
-                elif closest_obj in ["lego", "toy-car"]:
+                elif closest_obj in ["lego", "toy-car","stop-sign"]:
 
-                    if min_dist <= 20:
+                    if min_dist <= 30:
 
                         action = "STOP"
 
