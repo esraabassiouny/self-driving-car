@@ -169,11 +169,7 @@ void loop() {
       cmd.substring(rIndex + 1).toInt();
 
     forward(left_speed, right_speed);
-    // delay(700);
-    Serial.print("ACK:");
-    Serial.print(left_speed);
-    Serial.print(",");
-    Serial.println(right_speed);
+
   }
   }
   }

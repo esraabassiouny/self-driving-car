@@ -60,6 +60,7 @@ float readDistance() {
 void setup() {
 
   Serial.begin(9600);
+  Serial.setTimeout(10); // Set timeout to 10ms to prevent lag when parsing commands
 
   // Ultrasonic
   pinMode(trigPin, OUTPUT);
@@ -83,7 +84,7 @@ void setup() {
 
   myServo.write(90);
 
-  Serial.println("SYSTEM_READY");
+  //Serial.println("SYSTEM_READY");
 }
 
 // =====================================================

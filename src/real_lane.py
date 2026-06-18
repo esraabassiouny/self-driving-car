@@ -439,13 +439,13 @@ frame_count = 0
 try:
     while True:
         # Read all available responses from Arduino (non-blocking) to keep buffer clear
-        while ser.in_waiting > 0:
-            try:
-                response = ser.readline().decode('utf-8', errors='ignore').strip()
-                if response:
-                    print(f"📟 Arduino: {response}")
-            except Exception as e:
-                break
+        # while ser.in_waiting > 0:
+        #     try:
+        #         response = ser.readline().decode('utf-8', errors='ignore').strip()
+        #         if response:
+        #             print(f"📟 Arduino: {response}")
+        #     except Exception as e:
+        #         break
 
         frame = picam2.capture_array()
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)

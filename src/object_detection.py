@@ -77,7 +77,7 @@ def nms(boxes, scores, iou_threshold=0.45):
 # =========================
 # DETECTION FUNCTION
 # =========================
-def detect_objects():
+def detect_objects(skip_yolo=False):
 
     frame = picam2.capture_array()
 
@@ -108,6 +108,9 @@ def detect_objects():
         frame,
         (new_w, new_h)
     )
+
+    if skip_yolo:
+        return frame_resized, []
 
     # YOLO
     results = model(frame_resized, conf=0.5)

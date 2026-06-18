@@ -1,0 +1,39 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Power Diagram">
+    <mxGraphModel>
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="battery" value="2x18650 Battery&#10;7.4V" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="280" y="20" width="140" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="driver" value="Motor Driver" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="280" y="120" width="140" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="motors" value="4 DC Motors" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="280" y="220" width="140" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="arduino" value="Arduino UNO" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="220" width="140" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="servo" value="SG90 Servo" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="480" y="220" width="140" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="ultra" value="Ultrasonic Sensor" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="320" width="140" height="60" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="pi" value="Raspberry Pi 5&#10;(Power Bank)" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="280" y="360" width="160" height="70" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
