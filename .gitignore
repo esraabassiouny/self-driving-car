@@ -3,7 +3,4 @@ __pycache__/
 venv/
 .env
 
-*.jpg
-*.png
-
 *.log
