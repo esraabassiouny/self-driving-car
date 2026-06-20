@@ -351,6 +351,11 @@ STATE_ALIGN_LEFT = 'ALIGN_LEFT'
 STATE_ALIGN_RIGHT = 'ALIGN_RIGHT'
 STATE_STOP_SIGN_WAIT = 'STOP_SIGN_WAIT'
 STATE_STOP = 'STOP'
+STATE_UTURN_STOP1 = 'UTURN_STOP1'
+STATE_UTURN_FORWARD = 'UTURN_FORWARD'
+STATE_UTURN_STOP2 = 'UTURN_STOP2'
+STATE_UTURN_STEER = 'UTURN_STEER'
+STATE_UTURN_STOP_FINAL = 'UTURN_STOP_FINAL'
 
 current_state = STATE_LANE_FOLLOW
 current_lane = 'RIGHT'  # Start lane: 'RIGHT' or 'LEFT'
@@ -363,6 +368,8 @@ LANE_CHANGE_DURATION = 2.0  # Duration of lane change in seconds
 LOOK_AHEAD_FACTOR = 0.7    # Look-ahead height factor
 ALIGN_DURATION = 15.0      # Duration of counter-steering to straighten nose (in seconds)
 ALIGN_STEER_OFFSET = 135   # Steering speed adjustment during alignment
+UTURN_MIN_STEER_DURATION = 3.5  # Min steering duration in seconds before checking lane boundaries
+UTURN_TIMEOUT = 10.0   
 
 # Ultrasonic minimum distance (updated from Arduino serial data)
 min_dist = 999.0
@@ -371,6 +378,7 @@ min_dist = 999.0
 stop_until = 0.0
 ignore_stop_until = 0.0
 skip_detection_until = 0.0
+uturn_cooldown_until = 0.0
 
 prev_left_fit = None
 prev_right_fit = None
@@ -471,9 +479,12 @@ def draw_lane(img, binary, left_fit, right_fit, Minv):
     return cv2.addWeighted(img, 1, overlay, 0.3, 0)
 
 def detect_lane_end(binary_img):
+
     h, w = binary_img.shape
+
     # Focus only on lower-middle area
     roi = binary_img[int(h*0.65):int(h*0.90), :]
+
     lines = cv2.HoughLinesP(
         roi,
         1,
@@ -482,18 +493,26 @@ def detect_lane_end(binary_img):
         minLineLength=250,
         maxLineGap=30
     )
+
     if lines is None:
         return False
 
     for line in lines:
+
         x1, y1, x2, y2 = line[0]
+
         dx = x2 - x1
         dy = y2 - y1
+
         slope = dy / (dx + 1e-6)
+
         line_length = np.sqrt(dx**2 + dy**2)
+
         # Detect horizontal line
         if abs(slope) < 0.15 and line_length > 300:
+
             return True
+
     return False
 
 # ---------------------------
@@ -642,7 +661,11 @@ try:
         both_blocked_slow_down = False
         
         if current_state == STATE_LANE_FOLLOW:
-            if left_fit is None:
+            if detect_lane_end(mask) and (now > uturn_cooldown_until):
+                print("🛑 Horizontal line (lane end) detected! Starting U-Turn sequence...")
+                current_state = STATE_STOP
+                state_start_time = now
+            elif left_fit is None:
                 print("🛑 Lane boundaries disappeared! Stopping.")
                 current_state = STATE_STOP
                 state_start_time = now
@@ -738,6 +761,43 @@ try:
                 current_state = STATE_LANE_FOLLOW
                 print("🏁 Stop complete. Resuming lane following.")
 
+        elif current_state == STATE_UTURN_STOP1:
+            if now - state_start_time >= 0.3:
+                current_state = STATE_UTURN_FORWARD
+                state_start_time = now
+                print("➡️ UTURN: Moving forward...")
+
+        elif current_state == STATE_UTURN_FORWARD:
+            if now - state_start_time >= 0.7:
+                current_state = STATE_UTURN_STOP2
+                state_start_time = now
+                print("🛑 UTURN: Stopping before steering...")
+
+        elif current_state == STATE_UTURN_STOP2:
+            if now - state_start_time >= 0.3:
+                current_state = STATE_UTURN_STEER
+                state_start_time = now
+                print("🔄 UTURN: Steering left to turn around...")
+
+        elif current_state == STATE_UTURN_STEER:
+            if now - state_start_time >= UTURN_MIN_STEER_DURATION:
+                if left_valid and right_valid:
+                    current_state = STATE_UTURN_STOP_FINAL
+                    state_start_time = now
+                    print("🎯 UTURN: Lane boundaries detected! Stopping...")
+                elif now - state_start_time >= UTURN_TIMEOUT:
+                    current_state = STATE_STOP
+                    state_start_time = now
+                    print("⚠️ UTURN: Steering timeout! Stopping.")
+
+        elif current_state == STATE_UTURN_STOP_FINAL:
+            if now - state_start_time >= 1.0:
+                current_lane = 'RIGHT'
+                current_state = STATE_LANE_FOLLOW
+                uturn_cooldown_until = now + 8.0
+                state_start_time = now
+                print("🏁 UTURN complete. Resuming lane following.")
+
         # ========================================================
         # DRAW AND CALCULATE STEERING / MOTOR SPEED
         # ========================================================
@@ -766,6 +826,15 @@ try:
             command = "ALIGN_RIGHT"
             left_pwm = 215
             right_pwm = 0
+        elif current_state in (STATE_UTURN_STOP1, STATE_UTURN_STOP2, STATE_UTURN_STOP_FINAL):
+            left_pwm, right_pwm = 0, 0
+            command = "UTURN_STOP"
+        elif current_state == STATE_UTURN_FORWARD:
+            left_pwm, right_pwm = 200, 200
+            command = "UTURN_FORWARD"
+        elif current_state == STATE_UTURN_STEER:
+            left_pwm, right_pwm = 0, 215
+            command = "UTURN_STEER"
         elif left_fit is not None:
             error, lane_center, car_center = compute_steering(left_fit, right_fit, frame.shape)
             
@@ -836,6 +905,11 @@ try:
         elif key == ord('f') or key == ord('F'):
             current_state = STATE_LANE_FOLLOW
             print("🔄 Reset to STATE_LANE_FOLLOW state")
+        elif key == ord('u') or key == ord('U'):
+            if current_state == STATE_LANE_FOLLOW:
+                current_state = STATE_UTURN_STOP1
+                state_start_time = time.time()
+                print("🔄 Manual U-turn triggered")
 
 except KeyboardInterrupt:
     print("\n🛑 Stopping Car...")
@@ -855,5 +929,5 @@ finally:
     stop_camera()
     ser.close()
     print("✅ Stopped safely")
-
+    
 
