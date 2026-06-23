@@ -4,29 +4,38 @@ import cv2
 import numpy as np
 import time
 
-MODEL_PATH = "/home/gp/self_driving_car/models/best_ncnn_model"
+MODEL_PATH = "/home/gp/self_driving_car/models/best.onnx"
 TARGET_SIZE = (800, 600)
 
 # =========================
 # LOAD MODEL
 # =========================
-model = YOLO(MODEL_PATH, task="detect")
 
-# =========================
-# CAMERA
-# =========================
-picam2 = Picamera2()
+picam2 = None
+model = None
 
-picam2.configure(
-    picam2.create_preview_configuration(
-        main={"size": (800, 600)}
-    )
-)
+def init_detector():
+    global picam2, model
 
-picam2.start()
+    if model is None:
+        model = YOLO(MODEL_PATH, task="detect")
 
-print("✅ Camera started")
-print("✅ Model loaded")
+    if picam2 is None:
+        picam2 = Picamera2()
+
+        picam2.configure(
+            picam2.create_preview_configuration(
+                main={"size": (800, 600)}
+            )
+        )
+
+        picam2.start()
+
+        print("âœ… Camera started")
+        print("âœ… Model loaded")
+
+print("âœ… Camera started")
+print("âœ… Model loaded")
 # =========================
 # NMS
 # =========================
@@ -79,7 +88,11 @@ def nms(boxes, scores, iou_threshold=0.45):
 # =========================
 def detect_objects(skip_yolo=False):
 
+    if picam2 is None:
+        init_detector()
+
     frame = picam2.capture_array()
+    
 
     # Fix color
     if frame.shape[2] == 4:
@@ -143,6 +156,10 @@ def detect_objects(skip_yolo=False):
     for i in keep:
 
         x1, y1, x2, y2 = map(int, boxes_all[i])
+        width = x2 - x1
+        height = y2 - y1
+
+        area = width * height
 
         cls_id = class_ids_all[i]
 
@@ -153,7 +170,8 @@ def detect_objects(skip_yolo=False):
         detections.append({
             "name": name,
             "conf": conf,
-            "box": (x1, y1, x2, y2)
+            "box": (x1, y1, x2, y2),
+            "area": area
         })
 
     return frame_resized, detections
@@ -162,7 +180,11 @@ def detect_objects(skip_yolo=False):
 # CLEANUP
 # =========================
 def stop_camera():
-    picam2.stop()
+    global picam2
+
+    if picam2 is not None:
+        picam2.stop()
+        picam2 = None
 
 # =========================================================
 # MAIN
@@ -170,6 +192,7 @@ def stop_camera():
 if __name__ == "__main__":
 
     try:
+        init_detector()
 
         while True:
 
@@ -228,4 +251,3 @@ if __name__ == "__main__":
         cv2.destroyAllWindows()
 
         print("Program terminated safely")
-

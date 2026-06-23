@@ -17,18 +17,18 @@ int right_speed = 0;
 // MOVE FORWARD
 // =====================================================
 
-void forward(int leftSpeed, int rightSpeed) {
 
-  // LEFT MOTOR
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
+void forward(int leftSpeed, int rightSpeed)
+{
 
-  // RIGHT MOTOR
-  digitalWrite(IN3, LOW);
-  digitalWrite(IN4, HIGH);
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    
+    digitalWrite(IN3, HIGH);
+    digitalWrite(IN4, LOW);
 
-  analogWrite(enA, leftSpeed);
-  analogWrite(enB, rightSpeed);
+    analogWrite(enA, rightSpeed);
+    analogWrite(enB, leftSpeed);
 }
 
 // =====================================================

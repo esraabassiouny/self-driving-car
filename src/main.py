@@ -1,16 +1,40 @@
-from object_detection import detect_objects, stop_camera
+from object_detection import (
+    init_detector,
+    detect_objects,
+    stop_camera
+)
+
 import cv2
 import numpy as np
 import serial
 import time
-#import matplotlib
-#matplotlib.use('Agg')  # Use headless backend to prevent Qt/X11 GUI errors
-#import matplotlib.pyplot as plt
+from picamera2 import Picamera2
+import os
+from datetime import datetime
+
+SAVE_VIDEO = True
+SAVE_LANE = False
+SAVE_ROI = False
+SAVE_MASK = False
+SAVE_SLIDING = False
+error = 0
+
+frame_id = 0
+
+os.makedirs("debug/lane_following", exist_ok=True)
+os.makedirs("debug/roi", exist_ok=True)
+os.makedirs("debug/mask", exist_ok=True)
+os.makedirs("debug/sliding", exist_ok=True)
+
+def save_frame(path, img):
+    cv2.imwrite(path, img)
+
+
 
 ser = serial.Serial('/dev/ttyACM0', 9600, timeout=0)
 time.sleep(3)  # wait for Arduino to initialize
 
-last_reconnect_time = 0
+#last_reconnect_time = 0
 
 def safe_serial_write(data):
     global ser, last_reconnect_time
@@ -34,16 +58,16 @@ def safe_serial_write(data):
                     write_timeout=0.1
                 )
                 time.sleep(0.5)
-                print("✅ Serial reconnected successfully!")
+                print("âœ… Serial reconnected successfully!")
             except Exception as reconnect_error:
-                print(f"❌ Reconnection failed: {reconnect_error}")
+                print(f"âŒ Reconnection failed: {reconnect_error}")
 
         return
 
     try:
         ser.write(data)        # <-- THIS IS THE CORRECT LINE
     except (serial.SerialException, OSError) as e:
-        print(f"⚠️ Serial write failed: {e}")
+        print(f"âš ï¸ Serial write failed: {e}")
 
         try:
             ser.close()
@@ -58,6 +82,20 @@ def start_sweep():
 # ---------------------------
 def perspective_transform(img):
     h, w = img.shape[:2]
+    #     src = np.float32([
+    #     [w*0.37, h*0.68],   # top-left
+    #     [w*0.67, h*0.68],   # top-right
+    #     [w*0.76, h*0.98],   # bottom-right
+    #     [w*0.28, h*0.98]    # bottom-left
+    # ])
+ 
+    
+    # dst = np.float32([
+    #     [w*0.12, 0],     # top-left
+    #     [w*0.88, 0],     # top-right
+    #     [w*0.88, h],     # bottom-right
+    #     [w*0.12, h]      # bottom-left
+    # ])
     src = np.float32([
         [w*0.27, h*0.78],   # top-left
         [w*0.80, h*0.78],   # top-right
@@ -65,6 +103,7 @@ def perspective_transform(img):
         [w*0.23, h*0.98]    # bottom-left
     ])
  
+    
     dst = np.float32([
         [w*0.12, 0],     # top-left
         [w*0.88, 0],     # top-right
@@ -72,14 +111,19 @@ def perspective_transform(img):
         [w*0.12, h]      # bottom-left
     ])
     debug = img.copy()
+
     pts = np.array(src, np.int32)
+
     cv2.polylines(debug, [pts], True, (0,255,0), 3)
+
     cv2.imshow("ROI", debug)
     M = cv2.getPerspectiveTransform(src, dst)
     Minv = np.linalg.inv(M)
-    warped = cv2.warpPerspective(img, M, (w, h))
-    return warped, Minv, M
 
+    warped = cv2.warpPerspective(img, M, (w, h))
+    #cv2.imshow("Warped", warped)
+    return warped, Minv, M, debug
+    
 def is_inside_lane(box, left_fit, right_fit, M):
     if left_fit is None or right_fit is None:
         return False
@@ -104,70 +148,68 @@ def is_inside_lane(box, left_fit, right_fit, M):
 def threshold_white(img):
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     #cv2.imshow("hsv", hsv)
-    lower_white = np.array([0, 0, 200])
-    upper_white = np.array([180, 40, 255])
+
+    lower_white = np.array([0, 0, 220])
+    upper_white = np.array([180, 10, 255])
+
     return cv2.inRange(hsv, lower_white, upper_white)
 
 # ---------------------------
 # 3. Sliding Window
 # ---------------------------
 def sliding_window(binary_warped):
+
     histogram = np.sum(
         binary_warped[int(binary_warped.shape[0]*0.72):, :],
         axis=0
     )
+
     #print(f"histogram {histogram}")
+
     midpoint = histogram.shape[0] // 2
-    # if current_state in (STATE_LANE_CHANGE_LEFT, STATE_LANE_CHANGE_RIGHT):
-    #     # Find all peaks in the histogram above a threshold
-    #     peaks = []
-    #     win_size = 40
-    #     # Iterate from left to right (leaving some margin from borders)
-    #     for i in range(win_size, len(histogram) - win_size):
-    #         # Check if this point is a local maximum
-    #         if histogram[i] > 1000 and histogram[i] == np.max(histogram[i - win_size : i + win_size + 1]):
-    #             # Ensure it is sufficiently far from other peaks to avoid double detection of same line
-    #             if not peaks or all(abs(i - p) > 200 for p in peaks):
-    #                 peaks.append(i)
-    #     peaks.sort()
-    #     if len(peaks) >= 2:
-    #         leftx_base = peaks[0]
-    #         rightx_base = peaks[1]
-    #     else:
-    #         leftx_base = np.argmax(histogram[:midpoint])
-    #         rightx_base = np.argmax(histogram[midpoint:]) + midpoint
-    # else:
-    #     leftx_base = np.argmax(histogram[:midpoint])
-    #     rightx_base = np.argmax(histogram[midpoint:]) + midpoint
+
     leftx_base = np.argmax(histogram[:midpoint])
     rightx_base = np.argmax(histogram[midpoint:]) + midpoint
+
     #print(f"leftx_base {leftx_base}")
     #print(f"rightx_base {rightx_base}")
+
     nwindows = 9
+
     window_height = binary_warped.shape[0] // nwindows
+
     # IMPORTANT
     margin = 60
+
     minpix = 50
+
     # Get all white pixels
     nonzero = binary_warped.nonzero()
+
     nonzeroy = np.array(nonzero[0])
     nonzerox = np.array(nonzero[1])
+
     # Create debug image
     out_img = np.dstack(
         (binary_warped, binary_warped, binary_warped)
     )
+    
     leftx_current = leftx_base
     rightx_current = rightx_base
+
     left_lane_inds = []
     right_lane_inds = []
 
     for window in range(nwindows):
+
         # Window boundaries in Y
         win_y_low = binary_warped.shape[0] - (window+1)*window_height
         win_y_high = binary_warped.shape[0] - window*window_height
+
         # Window boundaries in X
         win_xleft_low = leftx_current - margin
         win_xleft_high = leftx_current + margin
+
         win_xright_low = rightx_current - margin
         win_xright_high = rightx_current + margin
 
@@ -179,6 +221,7 @@ def sliding_window(binary_warped):
             (0, 255, 0),
             2
         )
+
         cv2.rectangle(
             out_img,
             (win_xright_low, win_y_low),
@@ -208,11 +251,14 @@ def sliding_window(binary_warped):
 
         # Move left window center
         if len(good_left) > minpix:
+
             leftx_current = int(
                 np.mean(nonzerox[good_left])
             )
+
         # Move right window center
         if len(good_right) > minpix:
+
             rightx_current = int(
                 np.mean(nonzerox[good_right])
             )
@@ -222,35 +268,175 @@ def sliding_window(binary_warped):
     right_lane_inds = np.concatenate(right_lane_inds)
 
     # COLOR DETECTED PIXELS
+
     # Left lane = BLUE
     out_img[
         nonzeroy[left_lane_inds],
         nonzerox[left_lane_inds]
     ] = [255, 0, 0]
+
     # Right lane = RED
     out_img[
         nonzeroy[right_lane_inds],
         nonzerox[right_lane_inds]
     ] = [0, 0, 255]
+
     # SHOW DEBUG IMAGE
     cv2.imshow("Sliding Windows", out_img)
+
     return (
         nonzerox[left_lane_inds],
         nonzeroy[left_lane_inds],
         nonzerox[right_lane_inds],
-        nonzeroy[right_lane_inds]
+        nonzeroy[right_lane_inds],
+        out_img
     )
+
+# def sliding_window(binary_warped):
+#     histogram = np.sum(
+#         binary_warped[int(binary_warped.shape[0]*0.72):, :],
+#         axis=0
+#     )
+#     #print(f"histogram {histogram}")
+#     midpoint = histogram.shape[0] // 2
+#     # if current_state in (STATE_LANE_CHANGE_LEFT, STATE_LANE_CHANGE_RIGHT):
+#     #     # Find all peaks in the histogram above a threshold
+#     #     peaks = []
+#     #     win_size = 40
+#     #     # Iterate from left to right (leaving some margin from borders)
+#     #     for i in range(win_size, len(histogram) - win_size):
+#     #         # Check if this point is a local maximum
+#     #         if histogram[i] > 1000 and histogram[i] == np.max(histogram[i - win_size : i + win_size + 1]):
+#     #             # Ensure it is sufficiently far from other peaks to avoid double detection of same line
+#     #             if not peaks or all(abs(i - p) > 200 for p in peaks):
+#     #                 peaks.append(i)
+#     #     peaks.sort()
+#     #     if len(peaks) >= 2:
+#     #         leftx_base = peaks[0]
+#     #         rightx_base = peaks[1]
+#     #     else:
+#     #         leftx_base = np.argmax(histogram[:midpoint])
+#     #         rightx_base = np.argmax(histogram[midpoint:]) + midpoint
+#     # else:
+#     #     leftx_base = np.argmax(histogram[:midpoint])
+#     #     rightx_base = np.argmax(histogram[midpoint:]) + midpoint
+#     leftx_base = np.argmax(histogram[:midpoint])
+#     rightx_base = np.argmax(histogram[midpoint:]) + midpoint
+#     #print(f"leftx_base {leftx_base}")
+#     #print(f"rightx_base {rightx_base}")
+#     nwindows = 9
+#     window_height = binary_warped.shape[0] // nwindows
+#     # IMPORTANT
+#     margin = 60
+#     minpix = 50
+#     # Get all white pixels
+#     nonzero = binary_warped.nonzero()
+#     nonzeroy = np.array(nonzero[0])
+#     nonzerox = np.array(nonzero[1])
+#     # Create debug image
+#     out_img = np.dstack(
+#         (binary_warped, binary_warped, binary_warped)
+#     )
+#     leftx_current = leftx_base
+#     rightx_current = rightx_base
+#     left_lane_inds = []
+#     right_lane_inds = []
+
+#     for window in range(nwindows):
+#         # Window boundaries in Y
+#         win_y_low = binary_warped.shape[0] - (window+1)*window_height
+#         win_y_high = binary_warped.shape[0] - window*window_height
+#         # Window boundaries in X
+#         win_xleft_low = leftx_current - margin
+#         win_xleft_high = leftx_current + margin
+#         win_xright_low = rightx_current - margin
+#         win_xright_high = rightx_current + margin
+
+#         # DRAW WINDOWS
+#         cv2.rectangle(
+#             out_img,
+#             (win_xleft_low, win_y_low),
+#             (win_xleft_high, win_y_high),
+#             (0, 255, 0),
+#             2
+#         )
+#         cv2.rectangle(
+#             out_img,
+#             (win_xright_low, win_y_low),
+#             (win_xright_high, win_y_high),
+#             (0, 255, 0),
+#             2
+#         )
+
+#         # Find white pixels inside left window
+#         good_left = (
+#             (nonzeroy >= win_y_low) &
+#             (nonzeroy < win_y_high) &
+#             (nonzerox >= win_xleft_low) &
+#             (nonzerox < win_xleft_high)
+#         ).nonzero()[0]
+
+#         # Find white pixels inside right window
+#         good_right = (
+#             (nonzeroy >= win_y_low) &
+#             (nonzeroy < win_y_high) &
+#             (nonzerox >= win_xright_low) &
+#             (nonzerox < win_xright_high)
+#         ).nonzero()[0]
+
+#         left_lane_inds.append(good_left)
+#         right_lane_inds.append(good_right)
+
+#         # Move left window center
+#         if len(good_left) > minpix:
+#             leftx_current = int(
+#                 np.mean(nonzerox[good_left])
+#             )
+#         # Move right window center
+#         if len(good_right) > minpix:
+#             rightx_current = int(
+#                 np.mean(nonzerox[good_right])
+#             )
+
+#     # Merge all indices
+#     left_lane_inds = np.concatenate(left_lane_inds)
+#     right_lane_inds = np.concatenate(right_lane_inds)
+
+#     # COLOR DETECTED PIXELS
+#     # Left lane = BLUE
+#     out_img[
+#         nonzeroy[left_lane_inds],
+#         nonzerox[left_lane_inds]
+#     ] = [255, 0, 0]
+#     # Right lane = RED
+#     out_img[
+#         nonzeroy[right_lane_inds],
+#         nonzerox[right_lane_inds]
+#     ] = [0, 0, 255]
+#     # SHOW DEBUG IMAGE
+#     cv2.imshow("Sliding Windows", out_img)
+#     return (
+#         nonzerox[left_lane_inds],
+#         nonzeroy[left_lane_inds],
+#         nonzerox[right_lane_inds],
+#         nonzeroy[right_lane_inds]
+#     )
 
 # try max_adjust 130 -140 
 # base_speed 135
 def compute_pwm(error, base_speed=135, max_adjust=130):
+
     # More sensitive steering
     error = np.clip(error, -80, 80)
+
     adjust = (error / 80) * max_adjust # [-130-130]
+    
     base_speed = 135
+    
     #if abs(error) > 25:
      #   base_speed = 110
-    kp = 15
+    #kp = 15
+
     #adjust = int(error * kp)
     #if abs(error) < 10:
      #   adjust = error * 0.7
@@ -261,15 +447,16 @@ def compute_pwm(error, base_speed=135, max_adjust=130):
      
     left_pwm = base_speed + adjust
     right_pwm = base_speed - adjust
+
     left_pwm = int(np.clip(left_pwm, 0, 255))
     right_pwm = int(np.clip(right_pwm, 0, 255))
+
     return left_pwm, right_pwm
 
 # ---------------------------
-# 4. Fit Curves
-# ---------------------------
+
 def fit_polynomial(binary_warped):
-    leftx, lefty, rightx, righty = sliding_window(binary_warped)
+    leftx, lefty, rightx, righty, sliding_img = sliding_window(binary_warped)
     w = binary_warped.shape[1]
     left_valid = len(leftx) >= 50
     right_valid = len(rightx) >= 50
@@ -286,6 +473,7 @@ def fit_polynomial(binary_warped):
                 right_valid = False  # both are tracking the left line
 
     lane_width = 580  # Expected distance between lines in pixels
+
     if left_valid and right_valid:
         left_fit = np.polyfit(lefty, leftx, 2)
         right_fit = np.polyfit(righty, rightx, 2)
@@ -304,12 +492,14 @@ def fit_polynomial(binary_warped):
     out_img = np.dstack(
         (binary_warped, binary_warped, binary_warped)
     )
+
     # Generate y values
     ploty = np.linspace(
         0,
         binary_warped.shape[0]-1,
         binary_warped.shape[0]
     )
+
     # Generate fitted x values
     left_fitx = np.polyval(left_fit, ploty)
     right_fitx = np.polyval(right_fit, ploty)
@@ -329,6 +519,7 @@ def fit_polynomial(binary_warped):
             (0, 255, 255),
             3
         )
+
         cv2.line(
             out_img,
             (int(right_fitx[i]), int(ploty[i])),
@@ -336,20 +527,24 @@ def fit_polynomial(binary_warped):
             (0, 255, 255),
             3
         )
+
     #cv2.imshow("Polyfit Curves", out_img)
     return left_fit, right_fit, left_valid, right_valid
+
 
 # ---------------------------
 # 5. Steering Logic & Pure Pursuit Reference Path
 # ---------------------------
 STATE_LANE_FOLLOW = 'LANE_FOLLOW'
-STATE_LANE_CHANGE_LEFT = 'LANE_CHANGE_LEFT'
-STATE_LANE_CHANGE_RIGHT = 'LANE_CHANGE_RIGHT'
-STATE_PAUSE_LEFT = 'PAUSE_LEFT'
-STATE_PAUSE_RIGHT = 'PAUSE_RIGHT'
-STATE_ALIGN_LEFT = 'ALIGN_LEFT'
-STATE_ALIGN_RIGHT = 'ALIGN_RIGHT'
+# STATE_LANE_CHANGE_LEFT = 'LANE_CHANGE_LEFT'
+# STATE_LANE_CHANGE_RIGHT = 'LANE_CHANGE_RIGHT'
+# STATE_PAUSE_LEFT = 'PAUSE_LEFT'
+# STATE_PAUSE_RIGHT = 'PAUSE_RIGHT'
+# STATE_ALIGN_LEFT = 'ALIGN_LEFT'
+# STATE_ALIGN_RIGHT = 'ALIGN_RIGHT'
 STATE_STOP_SIGN_WAIT = 'STOP_SIGN_WAIT'
+STOP_SIGN_AREA_THRESHOLD = 25000
+
 STATE_STOP = 'STOP'
 STATE_UTURN_STOP1 = 'UTURN_STOP1'
 STATE_UTURN_FORWARD = 'UTURN_FORWARD'
@@ -358,123 +553,142 @@ STATE_UTURN_STEER = 'UTURN_STEER'
 STATE_UTURN_STOP_FINAL = 'UTURN_STOP_FINAL'
 
 current_state = STATE_LANE_FOLLOW
+first_lane_follow_frame = True
 current_lane = 'RIGHT'  # Start lane: 'RIGHT' or 'LEFT'
 state_start_time = 0
 
-PAUSE_DURATION = 0.2     # Pause duration in seconds to stabilize camera before steering to find boundaries
-LANE_WIDTH = 620          # Shift offset in pixels for lane change
-MERGE_DISTANCE = 150      # S-curve merge distance in pixels
-LANE_CHANGE_DURATION = 2.0  # Duration of lane change in seconds
-LOOK_AHEAD_FACTOR = 0.7    # Look-ahead height factor
-ALIGN_DURATION = 15.0      # Duration of counter-steering to straighten nose (in seconds)
-ALIGN_STEER_OFFSET = 135   # Steering speed adjustment during alignment
-UTURN_MIN_STEER_DURATION = 3.5  # Min steering duration in seconds before checking lane boundaries
-UTURN_TIMEOUT = 10.0   
+# PAUSE_DURATION = 0.2     # Pause duration in seconds to stabilize camera before steering to find boundaries
+# LANE_WIDTH = 620          # Shift offset in pixels for lane change
+# MERGE_DISTANCE = 150      # S-curve merge distance in pixels
+# LANE_CHANGE_DURATION = 2.0  # Duration of lane change in seconds
+# LOOK_AHEAD_FACTOR = 0.7    # Look-ahead height factor
+# ALIGN_DURATION = 15.0      # Duration of counter-steering to straighten nose (in seconds)
+# ALIGN_STEER_OFFSET = 135   # Steering speed adjustment during alignment
+UTURN_MIN_STEER_DURATION = 0  # Min steering duration in seconds before checking lane boundaries
+UTURN_TIMEOUT = 4.0   
 
 # Ultrasonic minimum distance (updated from Arduino serial data)
 min_dist = 999.0
 
-# Cooldowns and timers for stop signs / red lights
-stop_until = 0.0
+# # Cooldowns and timers for stop signs / red lights
+# stop_until = 0.0
 ignore_stop_until = 0.0
-skip_detection_until = 0.0
+# skip_detection_until = 0.0
 uturn_cooldown_until = 0.0
 
-prev_left_fit = None
-prev_right_fit = None
-consecutive_fail_count = 0
-MAX_FAIL_FRAMES = 10
+# prev_left_fit = None
+# prev_right_fit = None
+# consecutive_fail_count = 0
+# MAX_FAIL_FRAMES = 10
 
-def get_ref_x(y, left_fit, right_fit, w, h):
-    center_fit = (left_fit + right_fit) / 2.0
-    base_center = np.polyval(center_fit, y)
+# def get_ref_x(y, left_fit, right_fit, w, h):
+#     center_fit = (left_fit + right_fit) / 2.0
+#     base_center = np.polyval(center_fit, y)
     
-    # Calculate dynamic lane width at this Y height
-    x_left = np.polyval(left_fit, y)
-    x_right = np.polyval(right_fit, y)
-    dynamic_lane_width = x_right - x_left
+#     # Calculate dynamic lane width at this Y height
+#     x_left = np.polyval(left_fit, y)
+#     x_right = np.polyval(right_fit, y)
+#     dynamic_lane_width = x_right - x_left
     
-    if current_state == STATE_LANE_CHANGE_RIGHT:
-        target_center = base_center + dynamic_lane_width
-    elif current_state == STATE_LANE_CHANGE_LEFT:
-        target_center = base_center - dynamic_lane_width
-    else:
-        target_center = base_center
+#     if current_state == STATE_LANE_CHANGE_RIGHT:
+#         target_center = base_center + dynamic_lane_width
+#     elif current_state == STATE_LANE_CHANGE_LEFT:
+#         target_center = base_center - dynamic_lane_width
+#     else:
+#         target_center = base_center
         
-    if current_state in (STATE_LANE_CHANGE_LEFT, STATE_LANE_CHANGE_RIGHT):
-        if y < h - MERGE_DISTANCE:
-            return target_center
-        else:
-            u = (h - y) / MERGE_DISTANCE
-            f_u = 3 * u**2 - 2 * u**3
-            return (1 - f_u) * (w / 2) + f_u * target_center
-    else:
-        return target_center
+#     if current_state in (STATE_LANE_CHANGE_LEFT, STATE_LANE_CHANGE_RIGHT):
+#         if y < h - MERGE_DISTANCE:
+#             return target_center
+#         else:
+#             u = (h - y) / MERGE_DISTANCE
+#             f_u = 3 * u**2 - 2 * u**3
+#             return (1 - f_u) * (w / 2) + f_u * target_center
+#     else:
+#         return target_center
 
 
-def draw_reference_path(img, left_fit, right_fit, Minv, shape):
-    h, w = shape[:2]
+# def draw_reference_path(img, left_fit, right_fit, Minv, shape):
+#     h, w = shape[:2]
     
-    ploty = np.linspace(0, h-1, 20)
-    pts_warped = []
-    for y in ploty:
-        x = get_ref_x(y, left_fit, right_fit, w, h)
-        pts_warped.append([x, y])
+#     ploty = np.linspace(0, h-1, 20)
+#     pts_warped = []
+#     for y in ploty:
+#         x = get_ref_x(y, left_fit, right_fit, w, h)
+#         pts_warped.append([x, y])
     
-    pts_warped = np.array([pts_warped], dtype=np.float32)
-    pts_unwarped = cv2.perspectiveTransform(pts_warped, Minv)
-    pts_unwarped = pts_unwarped[0].astype(np.int32)
+#     pts_warped = np.array([pts_warped], dtype=np.float32)
+#     pts_unwarped = cv2.perspectiveTransform(pts_warped, Minv)
+#     pts_unwarped = pts_unwarped[0].astype(np.int32)
     
-    # Draw path as Cyan line
-    cv2.polylines(img, [pts_unwarped], False, (255, 255, 0), 3)
+#     # Draw path as Cyan line
+#     cv2.polylines(img, [pts_unwarped], False, (255, 255, 0), 3)
     
-    # Draw look-ahead point as Magenta circle
-    y_look_ahead = h * LOOK_AHEAD_FACTOR
-    x_look_ahead = get_ref_x(y_look_ahead, left_fit, right_fit, w, h)
-    la_pts = np.array([[[x_look_ahead, y_look_ahead]]], dtype=np.float32)
-    la_unwarped = cv2.perspectiveTransform(la_pts, Minv)
-    la_x, la_y = la_unwarped[0][0].astype(np.int32)
-    cv2.circle(img, (la_x, la_y), 10, (255, 0, 255), -1)
+#     # Draw look-ahead point as Magenta circle
+#     y_look_ahead = h * LOOK_AHEAD_FACTOR
+#     x_look_ahead = get_ref_x(y_look_ahead, left_fit, right_fit, w, h)
+#     la_pts = np.array([[[x_look_ahead, y_look_ahead]]], dtype=np.float32)
+#     la_unwarped = cv2.perspectiveTransform(la_pts, Minv)
+#     la_x, la_y = la_unwarped[0][0].astype(np.int32)
+#     cv2.circle(img, (la_x, la_y), 10, (255, 0, 255), -1)
 
 prev_error = 0
 def compute_steering(left_fit, right_fit, shape):
+
     global prev_error
+
     h, w = shape[:2]
 
-    # Evaluate at look-ahead distance (h * LOOK_AHEAD_FACTOR)
-    y_look_ahead = h * LOOK_AHEAD_FACTOR
-    target_x = get_ref_x(y_look_ahead, left_fit, right_fit, w, h)
+    # Evaluate further up the image to look ahead (anticipate curves)
+    #ys = [h * 0.55, h * 0.65, h * 0.75]
+    ys = [h * 0.75]
+    lane_centers = []
 
-    car_center = w // 2
-    error = target_x - car_center
+    for y in ys:
+        lx = np.polyval(left_fit, y)
+        rx = np.polyval(right_fit, y)
+        lane_centers.append((lx + rx) / 2)
+
+    lane_center = np.mean(lane_centers)
+
+    # tune this manually later
+    car_center = w/2 
+
+    error = lane_center - car_center
 
     # smoothing
     error = 0.3 * prev_error + 0.7 * error
     prev_error = error
 
-    return error, target_x, car_center
+    return error, lane_center, car_center
 
-def get_command(error, threshold=0):
+
+def get_command(error, threshold=10):
     if error > threshold:
-        return 'RIGHT'
+        return "RIGHT"
     elif error < -threshold:
-        return 'LEFT'
+        return "LEFT"
     else:
-        return 'STRAIGHT'
-
+        return "STRAIGHT"
+       
 # ---------------------------
 # 6. Draw Lane
 # ---------------------------
 def draw_lane(img, binary, left_fit, right_fit, Minv):
     h, w = binary.shape
+
     ploty = np.linspace(0, h-1, h)
     left_x = np.polyval(left_fit, ploty)
     right_x = np.polyval(right_fit, ploty)
+
     lane_img = np.zeros_like(img)
+
     pts_left = np.array([np.transpose(np.vstack([left_x, ploty]))])
     pts_right = np.array([np.flipud(np.transpose(np.vstack([right_x, ploty])))])
     pts = np.hstack((pts_left, pts_right)).astype(np.int32)
+
     cv2.fillPoly(lane_img, [pts], (0, 255, 0))
+
     overlay = cv2.warpPerspective(lane_img, Minv, (w, h))
     return cv2.addWeighted(img, 1, overlay, 0.3, 0)
 
@@ -518,11 +732,32 @@ def detect_lane_end(binary_img):
 # ---------------------------
 # MAIN
 # ---------------------------
-print("🚗 Unified control started (CTRL+C to stop)")
+print("ðŸš— Unified control started (CTRL+C to stop)")
 
 last_send_time = 0
 frame_count = 0
 
+init_detector()
+
+video_writer = None
+
+if SAVE_VIDEO:
+    os.makedirs("videos", exist_ok=True)
+
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+
+    video_name = datetime.now().strftime(
+        "videos/drive_%Y%m%d_%H%M%S.avi"
+    )
+
+    video_writer = cv2.VideoWriter(
+        video_name,
+        fourcc,
+        20.0,
+        (800, 600)
+    )
+
+    print(f"ðŸŽ¥ Recording video: {video_name}")
 try:
     start_sweep()
     #time.sleep(2)
@@ -542,34 +777,48 @@ try:
                 pass
 
         # Call NMS object detection (captures and processes the frame)
-        now = time.time()
-        skip_yolo = now < skip_detection_until
-        frame, detections = detect_objects(skip_yolo=skip_yolo)
-        frame_count += 1
+        # now = time.time()
+        # skip_yolo = now < skip_detection_until
+        #frame, detections = detect_objects(skip_yolo=skip_yolo)
+        frame, detections = detect_objects(skip_yolo=False)
+        # frame_count += 1
 
         # Process lane detection
-        warped, Minv, M = perspective_transform(frame)
+        warped, Minv, M, roi_debug = perspective_transform(frame)
+        cv2.imwrite(
+        f"debug/roi/frame_{frame_id:05d}.jpg",
+        roi_debug
+        )
         mask = threshold_white(warped)
         cv2.imshow("Mask", mask)
+        if SAVE_MASK:
+            cv2.imwrite(
+                f"debug/mask/frame_{frame_id:05d}.jpg",
+                mask
+            )
         
-        # Detect lane lines with fallback support for frame drops
+        # # Detect lane lines with fallback support for frame drops
         left_fit, right_fit, left_valid, right_valid = fit_polynomial(mask)
-        if left_fit is not None:
-            prev_left_fit = left_fit
-            prev_right_fit = right_fit
-            consecutive_fail_count = 0
-        else:
-            if prev_left_fit is not None and consecutive_fail_count < MAX_FAIL_FRAMES:
-                left_fit = prev_left_fit
-                right_fit = prev_right_fit
-                consecutive_fail_count += 1
-                left_valid = False
-                right_valid = False
-            else:
-                left_fit = None
-                right_fit = None
-                left_valid = False
-                right_valid = False
+
+        #left_fit, right_fit = fit_polynomial(mask)
+
+        
+        # if left_fit is not None:
+        #     prev_left_fit = left_fit
+        #     prev_right_fit = right_fit
+        #     consecutive_fail_count = 0
+        # else:
+        #     if prev_left_fit is not None and consecutive_fail_count < MAX_FAIL_FRAMES:
+        #         left_fit = prev_left_fit
+        #         right_fit = prev_right_fit
+        #         consecutive_fail_count += 1
+        #         left_valid = False
+        #         right_valid = False
+        #     else:
+        #         left_fit = None
+        #         right_fit = None
+        #         left_valid = False
+        #         right_valid = False
 
         # Parse detections and draw bounding boxes
         obstacle_detected_in_lane = False
@@ -589,8 +838,8 @@ try:
 
             x1, y1, x2, y2 = detection["box"]
             name = detection["name"]
-            
-            print(f"🔍 Detected {name} with conf: {conf:.2f}")
+            area =  detection["area"]
+            print(f"Detected {name} with conf: {conf:.2f} with area:{area}")
             
             # Check if object is inside current lane
             in_lane = is_inside_lane((x1, y1, x2, y2), left_fit, right_fit, M)
@@ -599,8 +848,9 @@ try:
             color = (0, 0, 255) if in_lane else (0, 255, 0)
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
             cv2.putText(frame, f"{name} {conf:.2f} ({'in' if in_lane else 'out'})", (x1, y1 - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
             
+                   
             # Check left and right lane occupancy for ANY class of detected object
             if left_fit is not None and right_fit is not None:
                 x_center = (x1 + x2) / 2.0
@@ -658,145 +908,156 @@ try:
         # STATE MACHINE TRANSITIONS
         # ========================================================
         now = time.time()
-        both_blocked_slow_down = False
+        # both_blocked_slow_down = False
         
         if current_state == STATE_LANE_FOLLOW:
             if detect_lane_end(mask) and (now > uturn_cooldown_until):
-                print("🛑 Horizontal line (lane end) detected! Starting U-Turn sequence...")
+                print("ðŸ›‘ Horizontal line (lane end) detected! Starting U-Turn sequence...")
+                current_state = STATE_UTURN_FORWARD
+                state_start_time = now
+            if left_fit is None and (now > uturn_cooldown_until):
+                print("ðŸ›‘ Lane boundaries disappeared! Stopping.")
                 current_state = STATE_STOP
                 state_start_time = now
-            elif left_fit is None:
-                print("🛑 Lane boundaries disappeared! Stopping.")
-                current_state = STATE_STOP
-                state_start_time = now
-            elif (stop_sign_inside or stop_sign_outside) and (min_dist <= 50.0) and (now > ignore_stop_until):
+            elif (stop_sign_inside or stop_sign_outside) and (min_dist <= 40.0 or area >= STOP_SIGN_AREA_THRESHOLD) and (now > ignore_stop_until):
                 if stop_sign_inside:
-                    print(f"🛑 Stop sign detected inside lane boundaries at {min_dist:.1f}cm! Stopping for 3 seconds...")
+                    print(f"ðŸ›‘ Stop sign detected inside lane boundaries at {min_dist:.1f}cm! Stopping for 3 seconds...")
                 else:
-                    print(f"🛑 Stop sign detected outside lane boundaries at {min_dist:.1f}cm! Stopping for 3 seconds...")
+                    print(f"ðŸ›‘ Stop sign detected outside lane boundaries at {min_dist:.1f}cm! Stopping for 3 seconds...")
                 current_state = STATE_STOP_SIGN_WAIT
                 state_start_time = now
                 stop_until = now + 3.0
                 ignore_stop_until = now + 8.0
                 skip_detection_until = now + 8.0
-                print("⚡ Skipping object detection for 8 seconds (during stop + resuming) to avoid duplicate detection.")
+                print("âš¡ Skipping object detection for 8 seconds (during stop + resuming) to avoid duplicate detection.")
             elif red_light_outside and (now > ignore_stop_until):
-                print("🛑 Traffic red light detected outside lane boundaries! Stopping for 3 seconds...")
+                print("ðŸ›‘ Traffic red light detected outside lane boundaries! Stopping for 3 seconds...")
                 current_state = STATE_STOP_SIGN_WAIT
                 state_start_time = now
                 stop_until = now + 3.0
                 ignore_stop_until = now + 8.0
-            elif has_obstacle:
-                # Determine lane occupancies dynamically
-                current_lane_blocked = False
-                other_lane_blocked = False
+        #     elif has_obstacle:
+        #         # Determine lane occupancies dynamically
+        #         current_lane_blocked = False
+        #         other_lane_blocked = False
                 
-                if current_lane == 'RIGHT':
-                    current_lane_blocked = right_lane_has_obstacle
-                    other_lane_blocked = left_lane_has_obstacle
-                else:
-                    current_lane_blocked = left_lane_has_obstacle
-                    other_lane_blocked = right_lane_has_obstacle
+        #         if current_lane == 'RIGHT':
+        #             current_lane_blocked = right_lane_has_obstacle
+        #             other_lane_blocked = left_lane_has_obstacle
+        #         else:
+        #             current_lane_blocked = left_lane_has_obstacle
+        #             other_lane_blocked = right_lane_has_obstacle
                 
-                if current_lane_blocked:
-                    if other_lane_blocked:
-                        # Both lanes blocked: slow down from 60 and stop at 30
-                        if min_dist <= 30.0:
-                            print(f"🛑 Both lanes blocked and distance <= 30cm ({min_dist:.1f}cm)! Stopping.")
-                            current_state = STATE_STOP
-                            state_start_time = now
-                        elif 30.0 < min_dist <= 60.0:
-                            print(f"⚠️ Both lanes blocked and distance <= 60cm ({min_dist:.1f}cm). Slowing down.")
-                            both_blocked_slow_down = True
-                    else:
-                        # Current lane blocked, other empty: change lane immediately
-                        if current_lane == 'RIGHT':
-                            print(f"⬅️ Obstacle in RIGHT lane. LEFT lane is empty. Changing lane LEFT!")
-                            current_state = STATE_LANE_CHANGE_LEFT
-                        else:
-                            print(f"➡️ Obstacle in LEFT lane. RIGHT lane is empty. Changing lane RIGHT!")
-                            current_state = STATE_LANE_CHANGE_RIGHT
-                        state_start_time = now
+        #         if current_lane_blocked:
+        #             if other_lane_blocked:
+        #                 # Both lanes blocked: slow down from 60 and stop at 30
+        #                 if min_dist <= 30.0:
+        #                     print(f"ðŸ›‘ Both lanes blocked and distance <= 30cm ({min_dist:.1f}cm)! Stopping.")
+        #                     current_state = STATE_STOP
+        #                     state_start_time = now
+        #                 elif 30.0 < min_dist <= 60.0:
+        #                     print(f"âš ï¸ Both lanes blocked and distance <= 60cm ({min_dist:.1f}cm). Slowing down.")
+        #                     both_blocked_slow_down = True
+        #             else:
+        #                 # Current lane blocked, other empty: change lane immediately
+        #                 if current_lane == 'RIGHT':
+        #                     print(f"â¬…ï¸ Obstacle in RIGHT lane. LEFT lane is empty. Changing lane LEFT!")
+        #                     current_state = STATE_LANE_CHANGE_LEFT
+        #                 else:
+        #                     print(f"âž¡ï¸ Obstacle in LEFT lane. RIGHT lane is empty. Changing lane RIGHT!")
+        #                     current_state = STATE_LANE_CHANGE_RIGHT
+        #                 state_start_time = now
 
-        elif current_state == STATE_LANE_CHANGE_LEFT:
-            if now - state_start_time >= LANE_CHANGE_DURATION:
-                current_state = STATE_PAUSE_LEFT
-                state_start_time = now
-                print(f"🔄 Lane change LEFT complete. Entering {STATE_PAUSE_LEFT} to find lane boundaries.")
+        # elif current_state == STATE_LANE_CHANGE_LEFT:
+        #     if now - state_start_time >= LANE_CHANGE_DURATION:
+        #         current_state = STATE_PAUSE_LEFT
+        #         state_start_time = now
+        #         print(f"ðŸ”„ Lane change LEFT complete. Entering {STATE_PAUSE_LEFT} to find lane boundaries.")
                 
-        elif current_state == STATE_LANE_CHANGE_RIGHT:
-            if now - state_start_time >= LANE_CHANGE_DURATION:
-                current_state = STATE_PAUSE_RIGHT
-                state_start_time = now
-                print(f"🔄 Lane change RIGHT complete. Entering {STATE_PAUSE_RIGHT} to find lane boundaries.")
+        # elif current_state == STATE_LANE_CHANGE_RIGHT:
+        #     if now - state_start_time >= LANE_CHANGE_DURATION:
+        #         current_state = STATE_PAUSE_RIGHT
+        #         state_start_time = now
+        #         print(f"ðŸ”„ Lane change RIGHT complete. Entering {STATE_PAUSE_RIGHT} to find lane boundaries.")
                 
-        elif current_state == STATE_PAUSE_LEFT:
-            if now - state_start_time >= PAUSE_DURATION:
-                current_state = STATE_ALIGN_RIGHT
-                state_start_time = now
-                print(f"🛑 Pause complete. Counter-steering RIGHT ({STATE_ALIGN_RIGHT}) to align...")
+        # elif current_state == STATE_PAUSE_LEFT:
+        #     if now - state_start_time >= PAUSE_DURATION:
+        #         current_state = STATE_ALIGN_RIGHT
+        #         state_start_time = now
+        #         print(f"ðŸ›‘ Pause complete. Counter-steering RIGHT ({STATE_ALIGN_RIGHT}) to align...")
                 
-        elif current_state == STATE_PAUSE_RIGHT:
-            if now - state_start_time >= PAUSE_DURATION:
-                current_state = STATE_ALIGN_LEFT
-                state_start_time = now
-                print(f"🛑 Pause complete. Counter-steering LEFT ({STATE_ALIGN_LEFT}) to align...")
+        # elif current_state == STATE_PAUSE_RIGHT:
+        #     if now - state_start_time >= PAUSE_DURATION:
+        #         current_state = STATE_ALIGN_LEFT
+        #         state_start_time = now
+        #         print(f"ðŸ›‘ Pause complete. Counter-steering LEFT ({STATE_ALIGN_LEFT}) to align...")
                 
-        elif current_state in (STATE_ALIGN_LEFT, STATE_ALIGN_RIGHT):
-            if left_valid and right_valid:
-                if current_state == STATE_ALIGN_RIGHT:
-                    current_lane = 'LEFT'
-                elif current_state == STATE_ALIGN_LEFT:
-                    current_lane = 'RIGHT'
-                current_state = STATE_LANE_FOLLOW
-                state_start_time = now
-                print(f"🎯 Both boundaries of the new {current_lane} lane detected! Resuming lane follow.")
-            elif now - state_start_time >= ALIGN_DURATION:
-                current_state = STATE_STOP
-                state_start_time = now
-                print(f"⚠️ Alignment timeout ({ALIGN_DURATION}s) reached! Stopping.")
+        # elif current_state in (STATE_ALIGN_LEFT, STATE_ALIGN_RIGHT):
+        #     if left_valid and right_valid:
+        #         if current_state == STATE_ALIGN_RIGHT:
+        #             current_lane = 'LEFT'
+        #         elif current_state == STATE_ALIGN_LEFT:
+        #             current_lane = 'RIGHT'
+        #         current_state = STATE_LANE_FOLLOW
+        #         state_start_time = now
+        #         print(f"ðŸŽ¯ Both boundaries of the new {current_lane} lane detected! Resuming lane follow.")
+        #     elif now - state_start_time >= ALIGN_DURATION:
+        #         current_state = STATE_STOP
+        #         state_start_time = now
+        #         print(f"âš ï¸ Alignment timeout ({ALIGN_DURATION}s) reached! Stopping.")
                 
         elif current_state == STATE_STOP_SIGN_WAIT:
+            cv2.putText(
+             result,
+             "STOP (5 CM)",
+             (int(result.shape[1]//2 - 120), int(result.shape[0]//2)),
+             cv2.FONT_HERSHEY_SIMPLEX,
+             1.5,
+              (0, 0, 255),
+              4
+              )
             if now >= stop_until:
                 current_state = STATE_LANE_FOLLOW
-                print("🏁 Stop complete. Resuming lane following.")
+                print("ðŸ Stop complete. Resuming lane following.")
 
         elif current_state == STATE_UTURN_STOP1:
             if now - state_start_time >= 0.3:
                 current_state = STATE_UTURN_FORWARD
                 state_start_time = now
-                print("➡️ UTURN: Moving forward...")
+                print("âž¡ï¸ UTURN: Moving forward...")
 
         elif current_state == STATE_UTURN_FORWARD:
-            if now - state_start_time >= 0.7:
+            if now - state_start_time >= 1.1:
                 current_state = STATE_UTURN_STOP2
                 state_start_time = now
-                print("🛑 UTURN: Stopping before steering...")
+                print("ðŸ›‘ UTURN: Stopping before steering...")
 
         elif current_state == STATE_UTURN_STOP2:
             if now - state_start_time >= 0.3:
                 current_state = STATE_UTURN_STEER
                 state_start_time = now
-                print("🔄 UTURN: Steering left to turn around...")
+                print("ðŸ”„ UTURN: Steering left to turn around...")
 
         elif current_state == STATE_UTURN_STEER:
             if now - state_start_time >= UTURN_MIN_STEER_DURATION:
                 if left_valid and right_valid:
                     current_state = STATE_UTURN_STOP_FINAL
                     state_start_time = now
-                    print("🎯 UTURN: Lane boundaries detected! Stopping...")
+                    print("ðŸŽ¯ UTURN: Lane boundaries detected! Stopping...")
                 elif now - state_start_time >= UTURN_TIMEOUT:
-                    current_state = STATE_STOP
+                    current_state = STATE_LANE_FOLLOW
+                    first_lane_follow_frame = True
                     state_start_time = now
-                    print("⚠️ UTURN: Steering timeout! Stopping.")
+                    print("âš ï¸ UTURN: Steering timeout! Following Lane.")
 
         elif current_state == STATE_UTURN_STOP_FINAL:
             if now - state_start_time >= 1.0:
                 current_lane = 'RIGHT'
                 current_state = STATE_LANE_FOLLOW
+                first_lane_follow_frame = True
                 uturn_cooldown_until = now + 8.0
                 state_start_time = now
-                print("🏁 UTURN complete. Resuming lane following.")
+                print("ðŸ UTURN complete. Resuming lane following.")
 
         # ========================================================
         # DRAW AND CALCULATE STEERING / MOTOR SPEED
@@ -804,80 +1065,162 @@ try:
         if left_fit is not None:
             # Draw detected lane overlay
             result = draw_lane(frame, mask, left_fit, right_fit, Minv)
+            if SAVE_LANE:
+                cv2.imwrite(
+                    f"debug/lane_following/frame_{frame_id:05d}.jpg",
+                    result
+                )
             # Draw Pure Pursuit path
-            draw_reference_path(result, left_fit, right_fit, Minv, frame.shape)
+            #draw_reference_path(result, left_fit, right_fit, Minv, frame.shape)
         else:
             result = frame.copy()
 
         left_pwm, right_pwm = 0, 0
         command = "STOPPED"
 
-        if current_state == STATE_STOP or current_state == STATE_STOP_SIGN_WAIT:
+        #if current_state == STATE_STOP or current_state == STATE_STOP_SIGN_WAIT:
+        if current_state == STATE_STOP:
             left_pwm, right_pwm = 0, 0
             command = "STOPPED"
-        elif current_state in (STATE_PAUSE_LEFT, STATE_PAUSE_RIGHT):
-            left_pwm, right_pwm = 0, 0
-            command = "PAUSED"
-        elif current_state == STATE_ALIGN_LEFT:
-            command = "ALIGN_LEFT"
-            left_pwm = 0
-            right_pwm = 215
-        elif current_state == STATE_ALIGN_RIGHT:
-            command = "ALIGN_RIGHT"
-            left_pwm = 215
-            right_pwm = 0
+            if left_valid and right_valid:
+                    current_state = STATE_LANE_FOLLOW
+        # elif current_state in (STATE_PAUSE_LEFT, STATE_PAUSE_RIGHT):
+        #     left_pwm, right_pwm = 0, 0
+        #     command = "PAUSED"
+        # elif current_state == STATE_ALIGN_LEFT:
+        #     command = "ALIGN_LEFT"
+        #     left_pwm = 0
+        #     right_pwm = 215
+        # elif current_state == STATE_ALIGN_RIGHT:
+        #     command = "ALIGN_RIGHT"
+        #     left_pwm = 215
+        #     right_pwm = 0
         elif current_state in (STATE_UTURN_STOP1, STATE_UTURN_STOP2, STATE_UTURN_STOP_FINAL):
             left_pwm, right_pwm = 0, 0
             command = "UTURN_STOP"
         elif current_state == STATE_UTURN_FORWARD:
-            left_pwm, right_pwm = 200, 200
+            left_pwm, right_pwm = 180, 180
             command = "UTURN_FORWARD"
         elif current_state == STATE_UTURN_STEER:
-            left_pwm, right_pwm = 0, 215
+            left_pwm, right_pwm = 0, 210
             command = "UTURN_STEER"
         elif left_fit is not None:
             error, lane_center, car_center = compute_steering(left_fit, right_fit, frame.shape)
+            command = get_command(error)
             
-            base_speed = 135
+            if first_lane_follow_frame:
+                left_pwm = 255
+                right_pwm = 255
+                first_lane_follow_frame = False
+            else:
+                left_pwm, right_pwm = compute_pwm(error)
+                
+            # GREEN = detected lane center
+            cv2.line(
+                result,
+                (int(lane_center), 0),
+                (int(lane_center), result.shape[0]),
+                (0, 255, 0),
+                3
+            )
+
+            # RED = desired car center
+            cv2.line(
+                result,
+                (int(car_center), 0),
+                (int(car_center), result.shape[0]),
+                (0, 0, 255),
+                3
+            )
+            command = get_command(error)
+            
+            
+            
+            # base_speed = 135
             if current_state == STATE_LANE_FOLLOW:
-                if yellow_detected_in_lane or both_blocked_slow_down:
+                cv2.putText(result,
+                        f"Curve: {command}",
+                        (20, 160),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0,255,0),
+                        2)
+
+                cv2.putText(result,
+                        f"Error: {int(error)}",
+                        (20, 200),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8,
+                        (0,255,0),
+                        2)
+                #if yellow_detected_in_lane or both_blocked_slow_down:
+                if yellow_detected_in_lane:
                     base_speed = 100
                     command = get_command(error) + " (SLOW)"
-                else:
-                    base_speed = 135
-                    command = get_command(error)
-                left_pwm, right_pwm = compute_pwm(error, base_speed=base_speed)
-            elif current_state == STATE_LANE_CHANGE_LEFT:
-                command = "LANE_CHANGE_LEFT"
-                left_pwm, right_pwm = compute_pwm(error, base_speed=125)
-            elif current_state == STATE_LANE_CHANGE_RIGHT:
-                command = "LANE_CHANGE_RIGHT"
-                left_pwm, right_pwm = compute_pwm(error, base_speed=125)
-            else:
-                command = get_command(error)
-                left_pwm, right_pwm = compute_pwm(error, base_speed=135)
+            #     else:
+            #         base_speed = 135
+            #         command = get_command(error)
+            #     left_pwm, right_pwm = compute_pwm(error, base_speed=base_speed)
+            # elif current_state == STATE_LANE_CHANGE_LEFT:
+            #     command = "LANE_CHANGE_LEFT"
+            #     left_pwm, right_pwm = compute_pwm(error, base_speed=125)
+            # elif current_state == STATE_LANE_CHANGE_RIGHT:
+            #     command = "LANE_CHANGE_RIGHT"
+            #     left_pwm, right_pwm = compute_pwm(error, base_speed=125)
+            # else:
+            #     command = get_command(error)
+            #     left_pwm, right_pwm = compute_pwm(error, base_speed=135)
         else:
-            command = "NO LANE"
             left_pwm, right_pwm = 0, 0
+            current_lane = "NO LANE"
 
         # Clip and convert speeds
         left_pwm = int(np.clip(left_pwm, 0, 255))
         right_pwm = int(np.clip(right_pwm, 0, 255))
-
+        if "UTURN" in current_state:
+            state_text = "LEFT U-TURN"
+        else:
+            state_text = current_state
         # OSD text
-        cv2.putText(result, f"State: {current_state} | Lane: {current_lane}", (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(result, f"Speed: L{left_pwm} R{right_pwm} | Cmd: {command}", (20, 80),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv2.putText(result, f"Radar: {min_dist:.0f}", (20, 120),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+        lane_color = (0, 0, 255) if current_lane == "NO LANE" else (255, 255, 255)
 
-        left_color = (0, 255, 0) if left_lane_status == "EMPTY" else ((0, 0, 255) if left_lane_status == "OBSTACLE" else (0, 255, 255))
-        right_color = (0, 255, 0) if right_lane_status == "EMPTY" else ((0, 0, 255) if right_lane_status == "OBSTACLE" else (0, 255, 255))
-        cv2.putText(result, f"LEFT Lane: {left_lane_status}", (20, 160),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, left_color, 2)
-        cv2.putText(result, f"RIGHT Lane: {right_lane_status}", (20, 200),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, right_color, 2)
+        cv2.putText(result,
+                    f"State: {state_text}",
+                    (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (255,255,255),
+                    2)
+
+        cv2.putText(result,
+                    f"Lane: {current_lane}",
+                    (20, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    lane_color,
+                    2)
+
+        # SPEED ALWAYS DIRECTLY UNDER LANE
+        cv2.putText(result,
+                    f"Speed: L{left_pwm} R{right_pwm}",
+                    (20, 120),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0,255,255),
+                    2)
+
+        # ONLY SHOW COMMAND + ERROR IF LANE EXISTS
+        #if left_fit is not None:
+            
+        #cv2.putText(result, f"Radar: {min_dist:.0f}", (20, 120),
+                    #cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+
+        # left_color = (0, 255, 0) if left_lane_status == "EMPTY" else ((0, 0, 255) if left_lane_status == "OBSTACLE" else (0, 255, 255))
+        # right_color = (0, 255, 0) if right_lane_status == "EMPTY" else ((0, 0, 255) if right_lane_status == "OBSTACLE" else (0, 255, 255))
+        # cv2.putText(result, f"LEFT Lane: {left_lane_status}", (20, 160),
+        #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, left_color, 2)
+        # cv2.putText(result, f"RIGHT Lane: {right_lane_status}", (20, 200),
+        #             cv2.FONT_HERSHEY_SIMPLEX, 0.7, right_color, 2)
 
         # Send motor commands to Arduino (rate limited to 20Hz / 50ms)
         current_time = time.time()
@@ -888,31 +1231,40 @@ try:
             print(f"SENT [{current_state}]: L{left_pwm:03d}R{right_pwm:03d} | Radar: {min_dist:.0f}")
 
         cv2.imshow("Lane Following & Obstacle Avoidance", result)
+        if SAVE_LANE:
+            cv2.imwrite(
+            f"debug/lane_following/frame_{frame_id:05d}.jpg",
+            result
+             )
+        if SAVE_VIDEO and video_writer is not None:
+            video_writer.write(result)
 
         key = cv2.waitKey(1) & 0xFF
         if key == 27:  # ESC to exit
             break
-        elif key == ord('l') or key == ord('L'):
-            if current_state == STATE_LANE_FOLLOW:
-                current_state = STATE_LANE_CHANGE_LEFT
-                state_start_time = time.time()
-                print("⬅️ Manual lane change LEFT triggered")
-        elif key == ord('r') or key == ord('R'):
-            if current_state == STATE_LANE_FOLLOW:
-                current_state = STATE_LANE_CHANGE_RIGHT
-                state_start_time = time.time()
-                print("➡️ Manual lane change RIGHT triggered")
-        elif key == ord('f') or key == ord('F'):
-            current_state = STATE_LANE_FOLLOW
-            print("🔄 Reset to STATE_LANE_FOLLOW state")
-        elif key == ord('u') or key == ord('U'):
-            if current_state == STATE_LANE_FOLLOW:
-                current_state = STATE_UTURN_STOP1
-                state_start_time = time.time()
-                print("🔄 Manual U-turn triggered")
+            
+        frame_id += 1    
+        # elif key == ord('l') or key == ord('L'):
+        #     if current_state == STATE_LANE_FOLLOW:
+        #         current_state = STATE_LANE_CHANGE_LEFT
+        #         state_start_time = time.time()
+        #         print("â¬…ï¸ Manual lane change LEFT triggered")
+        # elif key == ord('r') or key == ord('R'):
+        #     if current_state == STATE_LANE_FOLLOW:
+        #         current_state = STATE_LANE_CHANGE_RIGHT
+        #         state_start_time = time.time()
+        #         print("âž¡ï¸ Manual lane change RIGHT triggered")
+        # elif key == ord('f') or key == ord('F'):
+        #     current_state = STATE_LANE_FOLLOW
+        #     print("ðŸ”„ Reset to STATE_LANE_FOLLOW state")
+        # elif key == ord('u') or key == ord('U'):
+        #     if current_state == STATE_LANE_FOLLOW:
+        #         current_state = STATE_UTURN_STOP1
+        #         state_start_time = time.time()
+        #         print("ðŸ”„ Manual U-turn triggered")
 
 except KeyboardInterrupt:
-    print("\n🛑 Stopping Car...")
+    print("\nðŸ›‘ Stopping Car...")
     command_str = f"L000R000\n"
     safe_serial_write(command_str.encode())
     time.sleep(0.5)
@@ -925,9 +1277,8 @@ finally:
     except:
         pass
     time.sleep(0.2)
-    cv2.destroyAllWindows()
-    stop_camera()
+    if video_writer is not None:
+        video_writer.release()
+    cv2.destroyAllWindows()    
     ser.close()
-    print("✅ Stopped safely")
-    
-
+    print("âœ… Stopped safely")

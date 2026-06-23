@@ -117,14 +117,16 @@ void loop() {
   // =================================================
   // MOTOR CONTROL
   // =================================================
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
 
-  digitalWrite(IN3, LOW);
-  digitalWrite(IN4, HIGH);
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    
+    digitalWrite(IN3, HIGH);
+    digitalWrite(IN4, LOW);
 
-  analogWrite(enA, left_speed);
-  analogWrite(enB, right_speed);
+    analogWrite(enA, right_speed);
+    analogWrite(enB, left_speed);
+
 
   // =================================================
   // RADAR SWEEP
