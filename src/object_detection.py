@@ -4,8 +4,7 @@ import cv2
 import numpy as np
 import time
 
-MODEL_PATH = "/home/gp/self_driving_car/models/best.onnx"
-TARGET_SIZE = (800, 600)
+import config
 
 # =========================
 # LOAD MODEL
@@ -18,24 +17,22 @@ def init_detector():
     global picam2, model
 
     if model is None:
-        model = YOLO(MODEL_PATH, task="detect")
+        model = YOLO(config.MODEL_PATH, task="detect")
 
     if picam2 is None:
         picam2 = Picamera2()
 
         picam2.configure(
             picam2.create_preview_configuration(
-                main={"size": (800, 600)}
+                main={"size": config.TARGET_SIZE}
             )
         )
 
         picam2.start()
 
-        print("âœ… Camera started")
-        print("âœ… Model loaded")
+        print("✅ Camera started")
+        print("✅ Model loaded")
 
-print("âœ… Camera started")
-print("âœ… Model loaded")
 # =========================
 # NMS
 # =========================
@@ -110,8 +107,8 @@ def detect_objects(skip_yolo=False):
     h0, w0 = frame.shape[:2]
 
     r = min(
-        TARGET_SIZE[0] / w0,
-        TARGET_SIZE[1] / h0
+        config.TARGET_SIZE[0] / w0,
+        config.TARGET_SIZE[1] / h0
     )
 
     new_w = int(w0 * r)
@@ -251,3 +248,4 @@ if __name__ == "__main__":
         cv2.destroyAllWindows()
 
         print("Program terminated safely")
+
