@@ -246,17 +246,23 @@ def compute_steering(left_fit, right_fit, left_valid, right_valid, shape, state=
     if state == 'LANE_FOLLOW':
         error = lane_center - car_center
 
-    elif state == 'REACH_P1':
+    elif state == 'REACH_LEFT_LANE_CENTER':
         error = config.P1[0] - car_center
 
-    elif state in ('FORWARD', 'FORWARD_AFTER_STEER'):
+    elif state == 'REACH_RIGHT_LANE_CENTER':
+        error = config.P1_RIGHT[0] - car_center
+
+    elif state in ('FORWARD', 'FORWARD_AFTER_STEER', 'FORWARD_RIGHT', 'FORWARD_AFTER_STEER_RIGHT'):
         error = 0.0
 
-    elif state in ('PAUSE', 'PAUSE_AFTER_STEER'):
+    elif state in ('PAUSE', 'PAUSE_AFTER_STEER', 'PAUSE_RIGHT', 'PAUSE_AFTER_STEER_RIGHT'):
         error = 0.0
 
     elif state == 'STEER_RIGHT':
         error = 40.0
+
+    elif state == 'STEER_LEFT_R':
+        error = -40.0
 
     elif state == 'STOP':
         error = 0.0

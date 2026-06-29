@@ -33,20 +33,32 @@ class CarController:
         # 2. State Machine Registration
         self.state_instances = {
             'LANE_FOLLOW': states.LaneFollowState(),
-            'LANE_CHANGE_RIGHT': states.LaneChangeRightState(),
             'STOP': states.StopState(),
             'STOP_SIGN_WAIT': states.StopSignWaitState(),
+            'RED_LIGHT_WAIT': states.RedLightWaitState(),
             'UTURN_STOP1': states.UTurnStop1State(),
             'UTURN_FORWARD': states.UTurnForwardState(),
             'UTURN_STOP2': states.UTurnStop2State(),
             'UTURN_STEER': states.UTurnSteerState(),
             'UTURN_STOP_FINAL': states.UTurnStopFinalState(),
-            'REACH_P1': states.ReachP1State(),
+            'REACH_LEFT_LANE_CENTER': states.ReachP1State(),
             'FORWARD': states.ForwardState(),
             'PAUSE': states.PauseState(),
             'STEER_RIGHT': states.SteerRightState(),
             'PAUSE_AFTER_STEER': states.PauseAfterSteerState(),
-            'FORWARD_AFTER_STEER': states.ForwardAfterSteerState()
+            'FORWARD_AFTER_STEER': states.ForwardAfterSteerState(),
+            'REACH_RIGHT_LANE_CENTER': states.ReachP1RightState(),
+            'FORWARD_RIGHT': states.ForwardRightState(),
+            'PAUSE_RIGHT': states.PauseRightState(),
+            'STEER_LEFT_R': states.SteerLeftRState(),
+            'PAUSE_AFTER_STEER_RIGHT': states.PauseAfterSteerRightState(),
+            'FORWARD_AFTER_STEER_RIGHT': states.ForwardAfterSteerRightState(),
+            'PARK_SEARCH': states.ParkSearchState(),
+            'PARK_ALIGN': states.ParkAlignState(),
+            'PARK_STOP1': states.ParkStop1State(),
+            'PARK_BACK_STEER': states.ParkBackSteerState(),
+            'PARK_BACK_STRAIGHT': states.ParkBackStraightState(),
+            'PARK_COMPLETE': states.ParkCompleteState()
         }
         
         # Active state tracking
@@ -54,11 +66,13 @@ class CarController:
         self.active_state = self.state_instances[self.current_state_name]
         
         self.current_lane = 'RIGHT'
+        self.lane_initialized = True
         self.first_lane_follow_frame = True
         self.state_start_time = time.time()
         
         # Cooldowns and Timing-based limits
         self.uturn_cooldown_until = 0.0
+        self.space_clear_start = None
         self.ignore_stop_until = 0.0
         self.skip_detection_until = 0.0
         self.stop_until = 0.0
@@ -78,6 +92,7 @@ class CarController:
         self.stop_sign_inside = False
         self.stop_sign_outside = False
         self.red_light_outside = False
+        self.green_light_detected = False
         
         # Output speeds and display info
         self.left_pwm = 0
@@ -115,10 +130,12 @@ class CarController:
             self.change_state(next_state_name)
 
     def send_controls(self):
-        # Clip motor PWM speeds safely
-        self.left_pwm = int(np.clip(self.left_pwm, 0, 255))
-        self.right_pwm = int(np.clip(self.right_pwm, 0, 255))
+        # Clip motor PWM speeds safely (support signed PWM -255 to 255 for reverse)
+        self.left_pwm = int(np.clip(self.left_pwm, -255, 255))
+        self.right_pwm = int(np.clip(self.right_pwm, -255, 255))
         self.hardware.send_motor_speeds(self.left_pwm, self.right_pwm, self.current_state_name, self.min_dist)
+
+
 
 
 def main():
@@ -154,7 +171,17 @@ def main():
             
             # 2. Run object detection (using YOLO)
             time_detect = time.time()
-            frame, detections = detect_objects(skip_yolo=True)
+            # Stop detection during lane changes to save CPU/resources
+            lane_changing_states = {
+                'REACH_LEFT_LANE_CENTER', 'FORWARD', 'PAUSE', 'STEER_RIGHT', 
+                'PAUSE_AFTER_STEER', 'FORWARD_AFTER_STEER', 'LANE_CHANGE_RIGHT',
+                'REACH_RIGHT_LANE_CENTER', 'FORWARD_RIGHT', 'PAUSE_RIGHT', 'STEER_LEFT_R',
+                'PAUSE_AFTER_STEER_RIGHT', 'FORWARD_AFTER_STEER_RIGHT',
+                'PARK_SEARCH', 'PARK_ALIGN', 'PARK_STOP1', 'PARK_BACK_STEER', 'PARK_BACK_STRAIGHT', 'PARK_COMPLETE'
+            }
+            skip_yolo = (car.current_state_name in lane_changing_states) or (time.time() < car.skip_detection_until)
+            
+            frame, detections = detect_objects(skip_yolo=skip_yolo)
             time_after = time.time() - time_detect
             print("time_detection", time_after)
             
@@ -176,17 +203,11 @@ def main():
                 axis=0
             )
             
-            peaks = []
-            for i in range(50, len(histogram) - 50):
-                if histogram[i] > 1000:
-                    if histogram[i] == np.max(histogram[i-50:i+50]):
-                        peaks.append(i)
-            print("Lane change peaks:", peaks)
-            
             hist_img = cv2.cvtColor(mask_change, cv2.COLOR_GRAY2BGR)
-            for p in peaks:
-                cv2.line(hist_img, (p, 0), (p, hist_img.shape[0]), (0, 0, 255), 3)
-            cv2.imshow("3 Lane Peaks", hist_img)
+            
+            # Default lane is set to RIGHT on startup (user can press 'L' to toggle manually)
+            if not car.lane_initialized and car.current_state_name == 'LANE_FOLLOW':
+                car.lane_initialized = True
             
             # Fit polynomial to get left and right lanes
             left_fit, right_fit, left_valid, right_valid = fit_polynomial(mask)
@@ -195,69 +216,92 @@ def main():
             car.stop_sign_inside = False
             car.stop_sign_outside = False
             car.red_light_outside = False
+            car.green_light_detected = False
             car.left_lane_has_obstacle = False
             car.right_lane_has_obstacle = False
             car.has_obstacle = False
             
-            if len(detections) == 2:
-                for detection in detections:
-                    conf = detection["conf"]
-                    x1, y1, x2, y2 = detection["box"]
-                    name = detection["name"]
-                    area = detection["area"]
-                    det_dist = vision_utils.estimate_distance(area)
-                    car.distance = min(car.distance, det_dist)
+            #if len(detections) == 2:
+            for detection in detections:
+                conf = detection["conf"]
+                x1, y1, x2, y2 = detection["box"]
+                name = detection["name"]
+                area = detection["area"]
+                det_dist = vision_utils.estimate_distance(area)
+                car.distance = min(car.distance, det_dist)
+                
+                print(f"Detected {name} (conf: {conf:.2f}, dist: {det_dist:.2f} cm)")
+                
+                is_traffic_item = name in ["stop-sign", "red", "yellow", "green"]
+                object_lane_tag = ""
+                box_color = (0, 255, 0)
+                
+                # Lane localization for physical obstacles
+                if  left_fit is not None and right_fit is not None:
+                    #not is_traffic_item and
+                    x_center = (x1 + x2) / 2.0
+                    y_bottom = float(y2)
+                    pts = np.array([[[x_center, y_bottom]]], dtype=np.float32)
+                    pts_warped = cv2.perspectiveTransform(pts, M)
+                    xw, yw = pts_warped[0][0]
                     
-                    print(f"Detected {name} (conf: {conf:.2f}, dist: {det_dist:.2f} cm)")
+                    x_left = np.polyval(left_fit, yw)
+                    x_right = np.polyval(right_fit, yw)
+                    lane_width_pixels = x_right - x_left
                     
-                    in_lane = vision_utils.is_inside_lane((x1, y1, x2, y2), left_fit, right_fit, M)
-                    color = (0, 0, 255) if in_lane else (0, 255, 0)
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                    
-                    label = f"{name} {conf:.2f}"
-                    dist_label = f"dist: {det_dist:.2f} cm"
-                    cv2.putText(frame, label, (x1, max(20, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-                    cv2.putText(frame, dist_label, (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
-                    
-                    # Lane localization
-                    if left_fit is not None and right_fit is not None:
-                        x_center = (x1 + x2) / 2.0
-                        y_bottom = float(y2)
-                        pts = np.array([[[x_center, y_bottom]]], dtype=np.float32)
-                        pts_warped = cv2.perspectiveTransform(pts, M)
-                        xw, yw = pts_warped[0][0]
-                        
-                        x_left = np.polyval(left_fit, yw)
-                        x_right = np.polyval(right_fit, yw)
-                        lane_width_pixels = x_right - x_left
-                        
-                        print(f"xw: {xw}, x_left+100: {x_left+100}")
-                        
-                        if x_left + 100 <= xw <= x_right:
-                            car.has_obstacle = True
-                            if car.current_lane == 'RIGHT':
-                                car.right_lane_has_obstacle = True
-                            else:
-                                car.left_lane_has_obstacle = True
-                        elif xw < x_left + 100:
-                            if car.current_lane == 'RIGHT':
-                                car.left_lane_has_obstacle = True
-                        elif x_right < xw <= (x_right + lane_width_pixels):
-                            if car.current_lane == 'LEFT':
-                                car.right_lane_has_obstacle = True
-                                
-                    if name == "stop-sign":
-                        if in_lane:
-                            car.stop_sign_inside = True
+                    # 1. Obstacle inside car's current lane
+                    if x_left <= xw <= x_right:
+                        object_lane_tag = f"IN MY LANE ({car.current_lane})"
+                        box_color = (0, 0, 255)  # Red
+                        car.has_obstacle = True
+                        if car.current_lane == 'RIGHT':
+                            car.right_lane_has_obstacle = True
                         else:
-                            car.stop_sign_outside = True
-                    elif name == "red":
-                        if not in_lane:
-                            car.red_light_outside = True
-                    elif name == "yellow":
-                        if in_lane:
-                            car.yellow_slow_until = time.time() + config.YELLOW_SLOW_DURATION
-            
+                            car.left_lane_has_obstacle = True
+                            
+                    elif car.current_lane == 'RIGHT':
+                        # In RIGHT lane: Left side (x_left) is middle line, Right side (x_right) is road edge
+                        if (x_left - lane_width_pixels * 1.0) <= xw < x_left:
+                            object_lane_tag = "IN LEFT LANE"
+                            box_color = (255, 165, 0)  # Orange
+                            car.left_lane_has_obstacle = True
+                        else:
+                            object_lane_tag = "OUTSIDE ROAD"
+                            box_color = (0, 255, 0)  # Green
+                            
+                    elif car.current_lane == 'LEFT':
+                        # In LEFT lane: Left side (x_left) is road edge, Right side (x_right) is middle line
+                        if x_right < xw <= (x_right + lane_width_pixels * 1.0):
+                            object_lane_tag = "IN RIGHT LANE"
+                            box_color = (255, 165, 0)  # Orange
+                            car.right_lane_has_obstacle = True
+                        else:
+                            object_lane_tag = "OUTSIDE ROAD"
+                            box_color = (0, 255, 0)  # Green
+                else:
+                    box_color = (0, 255, 255) if is_traffic_item else (0, 255, 0)
+                    
+                # Bounding box & text visualization
+                cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
+                
+                label = f"{name} {conf:.2f}"
+                dist_label = f"dist: {det_dist:.1f}cm"
+                cv2.putText(frame, label, (x1, max(20, y1 - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 2)
+                cv2.putText(frame, dist_label, (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                
+                if object_lane_tag:
+                    cv2.putText(frame, object_lane_tag, (x1, y2 + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 2)
+                    cv2.circle(frame, (int((x1+x2)/2), y2), 5, box_color, -1)
+                
+                if name == "stop-sign":
+                    car.stop_sign_outside = True
+                elif name == "red":
+                    car.red_light_outside = True
+                elif name == "green":
+                    car.green_light_detected = True
+                elif name == "yellow":
+                    car.yellow_slow_until = time.time() + config.YELLOW_SLOW_DURATION
+        
             # 5. Draw Lane overlays and debug path
             if left_fit is not None:
                 result = draw_lane(frame, mask, left_fit, right_fit, Minv)
@@ -270,7 +314,7 @@ def main():
             car.update(frame, left_fit, right_fit, left_valid, right_valid, mask)
             
             # 7. Draw OSD/OSD center lines
-            if left_fit is not None and car.current_state_name in ['LANE_FOLLOW', 'REACH_P1']:
+            if left_fit is not None and car.current_state_name in ['LANE_FOLLOW', 'REACH_LEFT_LANE_CENTER', 'REACH_RIGHT_LANE_CENTER']:
                 # Green = Detected Lane Center
                 cv2.line(result, (int(car.lane_center), 0), (int(car.lane_center), result.shape[0]), (0, 255, 0), 3)
                 # Red = Desired Car Center
@@ -279,9 +323,13 @@ def main():
             # Compute text for current state
             if "UTURN" in car.current_state_name:
                 state_text = "LEFT U-TURN"
+            elif "PARK" in car.current_state_name:
+                state_text = "AUTO PARK" if car.current_state_name != 'PARK_COMPLETE' else "PARKED"
+            elif car.current_state_name == 'RED_LIGHT_WAIT':
+                state_text = "RED LIGHT STOP"
             elif time.time() < car.yellow_slow_until:
                 state_text = "SLOW DOWN"
-            elif car.current_state_name in ['REACH_P1', 'FORWARD', 'PAUSE', 'STEER_RIGHT', 'PAUSE_AFTER_STEER']:
+            elif car.current_state_name in ['REACH_LEFT_LANE_CENTER', 'FORWARD', 'PAUSE', 'STEER_RIGHT', 'PAUSE_AFTER_STEER', 'REACH_RIGHT_LANE_CENTER', 'FORWARD_RIGHT', 'PAUSE_RIGHT', 'STEER_LEFT_R', 'PAUSE_AFTER_STEER_RIGHT']:
                 state_text = "CHANGE LANE"
             else:
                 state_text = car.current_state_name
@@ -332,6 +380,12 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key == 27:  # ESC to exit
                 break
+            elif key == ord('p') or key == ord('P'):
+                print("🅿️ User pressed 'P'! Searching for available parking space (>30cm)...")
+                car.change_state('PARK_SEARCH')
+            elif key == ord('l') or key == ord('L'):
+                car.current_lane = 'LEFT' if car.current_lane == 'RIGHT' else 'RIGHT'
+                print(f"🔄 User pressed 'L'! Manually toggled current lane to: {car.current_lane}")
             
             frame_id += 1
             

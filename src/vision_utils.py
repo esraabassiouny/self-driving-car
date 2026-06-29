@@ -50,3 +50,34 @@ def estimate_distance(area):
     if area <= 0:
         return 10.0
     return (2000 / area) * 100  # area is inverse with area (big area = small distance = close obstacle)
+
+def detect_current_lane(mask_change):
+    if mask_change is None:
+        return None
+    h, w = mask_change.shape[:2]
+    # Focus on lower portion of warped road view
+    roi = mask_change[int(h * 0.5):, :]
+    mid_x = w // 2  # 400
+    
+    # Count white pixels in left half vs right half of the wide road view
+    left_pixels = np.sum(roi[:, :mid_x] == 255)
+    right_pixels = np.sum(roi[:, mid_x:] == 255)
+    
+    # Calculate histogram peaks for detailed logging
+    histogram = np.sum(roi == 255, axis=0)
+    peaks = []
+    win_size = 30
+    for i in range(win_size, w - win_size):
+        if histogram[i] > 600 and histogram[i] == np.max(histogram[i - win_size : i + win_size + 1]):
+            if not peaks or (i - peaks[-1]) > 100:
+                peaks.append(i)
+                
+    # In RIGHT lane -> center divider is to the left (x < 400) -> left_pixels > right_pixels
+    # In LEFT lane -> center divider is to the right (x > 400) -> right_pixels > left_pixels
+    if left_pixels > right_pixels:
+        detected = 'RIGHT'
+    else:
+        detected = 'LEFT'
+        
+    print(f"🔍 [Auto Lane Detect] Peaks: {peaks} | LeftPix: {left_pixels}, RightPix: {right_pixels} -> Determined Lane: {detected}")
+    return detected

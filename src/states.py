@@ -45,11 +45,8 @@ class LaneFollowState(State):
             
         # 4. Check Red Light
         if car.red_light_outside and (now > car.ignore_stop_until):
-            print("🛑 Traffic red light detected outside lane boundaries! Stopping for 3 seconds...")
-            car.stop_until = now + 3.0
-            car.ignore_stop_until = now + 8.0
-            car.skip_detection_until = now + 8.0
-            return 'STOP_SIGN_WAIT'
+            print("🛑 Traffic red light detected! Stopping until GREEN light is detected...")
+            return 'RED_LIGHT_WAIT'
             
         # 5. Check Obstacles
         if car.has_obstacle:
@@ -77,13 +74,14 @@ class LaneFollowState(State):
                     if car.current_lane == 'RIGHT':
                         print(f" Obstacle in RIGHT lane. LEFT lane is empty. Changing lane LEFT!")
                         if car.min_dist <= 35.0 or car.distance <= 35.0:
-                            return 'REACH_P1'
+                            return 'REACH_LEFT_LANE_CENTER'
                     else:
                         print(f" Obstacle in LEFT lane. RIGHT lane is empty. Changing lane RIGHT!")
-                        return 'LANE_CHANGE_RIGHT'
+                        if car.min_dist <= 35.0 or car.distance <= 35.0:
+                            return 'REACH_RIGHT_LANE_CENTER'
                         
         # Standard Steering Control
-        if left_fit is not None:
+        if left_fit is not None or right_fit is not None:   #شششششششششششششششششششششششششششششششششششش
             error, lane_center, car_center = compute_steering(left_fit, right_fit, left_valid, right_valid, frame.shape, 'LANE_FOLLOW')
             car.error = error
             car.lane_center = lane_center
@@ -112,18 +110,7 @@ class LaneFollowState(State):
 
 class LaneChangeRightState(State):
     def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
-        if left_fit is not None:
-            error, lane_center, car_center = compute_steering(left_fit, right_fit, left_valid, right_valid, frame.shape, 'LANE_CHANGE_RIGHT')
-            car.error = error
-            car.lane_center = lane_center
-            car.car_center = car_center
-            car.command = "LANE_CHANGE_RIGHT"
-            car.left_pwm, car.right_pwm = compute_pwm(error)
-        else:
-            car.left_pwm = 0
-            car.right_pwm = 0
-            car.command = "STOPPED"
-        return None
+        return 'REACH_RIGHT_LANE_CENTER'
 
 
 class StopState(State):
@@ -144,6 +131,18 @@ class StopSignWaitState(State):
         car.command = "STOPPED"
         if time.time() >= car.stop_until:
             print(" Stop complete. Resuming lane following.")
+            return 'LANE_FOLLOW'
+        return None
+
+
+class RedLightWaitState(State):
+    def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
+        car.left_pwm = 0
+        car.right_pwm = 0
+        car.command = "RED_LIGHT_STOP"
+        if car.green_light_detected:
+            print("🟢 Traffic green light detected! Resuming lane following.")
+            car.ignore_stop_until = time.time() + 4.0
             return 'LANE_FOLLOW'
         return None
 
@@ -213,7 +212,7 @@ class UTurnStopFinalState(State):
 
 class ReachP1State(State):
     def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
-        error, lane_center, car_center = compute_steering(left_fit, right_fit, left_valid, right_valid, frame.shape, 'REACH_P1')
+        error, lane_center, car_center = compute_steering(left_fit, right_fit, left_valid, right_valid, frame.shape, 'REACH_LEFT_LANE_CENTER')
         car.error = error
         car.lane_center = lane_center
         car.car_center = car_center
@@ -279,3 +278,150 @@ class ForwardAfterSteerState(State):
             print("🎯 Forward after steer complete! Resuming STATE_LANE_FOLLOW in LEFT lane.")
             return 'LANE_FOLLOW'
         return None
+
+
+class ReachP1RightState(State):
+    def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
+        error, lane_center, car_center = compute_steering(left_fit, right_fit, left_valid, right_valid, frame.shape, 'REACH_RIGHT_LANE_CENTER')
+        car.error = error
+        car.lane_center = lane_center
+        car.car_center = car_center
+        car.command = get_command(error)
+        car.left_pwm, car.right_pwm = compute_pwm(error)
+        if time.time() - car.state_start_time >= config.P1_DURATION:
+            print(f"🎯 P1 RIGHT duration reached ({config.P1_DURATION}s)! Transitioning to STATE_FORWARD_RIGHT.")
+            return 'FORWARD_RIGHT'
+        return None
+
+
+class ForwardRightState(State):
+    def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
+        car.left_pwm = 200
+        car.right_pwm = 200
+        car.command = "FORWARD"
+        if time.time() - car.state_start_time >= config.FORWARD_DURATION:
+            print(f"⏭ Forward duration reached ({config.FORWARD_DURATION}s)! Transitioning to STATE_PAUSE_RIGHT.")
+            return 'PAUSE_RIGHT'
+        return None
+
+
+class PauseRightState(State):
+    def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
+        car.left_pwm = 0
+        car.right_pwm = 0
+        car.command = "PAUSED"
+        if time.time() - car.state_start_time >= config.PAUSE_DURATION:
+            print(f"🛑 Pause duration reached ({config.PAUSE_DURATION}s)! Transitioning to STATE_STEER_LEFT_R.")
+            return 'STEER_LEFT_R'
+        return None
+
+
+class SteerLeftRState(State):
+    def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
+        car.left_pwm = 0
+        car.right_pwm = 195
+        car.command = "STEER_LEFT"
+        if left_valid and right_valid:
+            print("🎯 Both boundaries of the new lane detected! Transitioning to STATE_PAUSE_AFTER_STEER_RIGHT.")
+            return 'PAUSE_AFTER_STEER_RIGHT'
+        return None
+
+
+class PauseAfterSteerRightState(State):
+    def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
+        car.left_pwm = 0
+        car.right_pwm = 0
+        car.command = "PAUSED"
+        if time.time() - car.state_start_time >= config.PAUSE_AFTER_STEER_DURATION:
+            print("🎯 Pause after steer complete! Transitioning to STATE_FORWARD_AFTER_STEER_RIGHT.")
+            return 'FORWARD_AFTER_STEER_RIGHT'
+        return None
+
+
+class ForwardAfterSteerRightState(State):
+    def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
+        car.left_pwm = 180
+        car.right_pwm = 180
+        car.command = "FORWARD"
+        if time.time() - car.state_start_time >= config.FORWARD_AFTER_STEER_DURATION:
+            car.current_lane = 'RIGHT'
+            print("🎯 Forward after steer complete! Resuming STATE_LANE_FOLLOW in RIGHT lane.")
+            return 'LANE_FOLLOW'
+        return None
+
+
+class ParkSearchState(State):
+    def on_enter(self, car):
+        car.space_clear_start = None
+        print("🔍 Auto Park: Searching for right-side parking space (>30cm)...")
+
+    def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
+        car.left_pwm = config.PARK_SEARCH_SPEED
+        car.right_pwm = config.PARK_SEARCH_SPEED
+        car.command = "PARK_SEARCH"
+        
+        current_dist = min(car.min_dist, car.distance)
+        if current_dist > config.PARK_SEARCH_DIST_THRESHOLD:
+            if car.space_clear_start is None:
+                car.space_clear_start = time.time()
+            elif time.time() - car.space_clear_start >= config.PARK_SEARCH_DURATION:
+                print(f"✅ Right parking space confirmed clear (> {config.PARK_SEARCH_DIST_THRESHOLD}cm)! Positioning forward...")
+                return 'PARK_ALIGN'
+        else:
+            car.space_clear_start = None
+            
+        return None
+
+
+class ParkAlignState(State):
+    def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
+        car.left_pwm = config.PARK_ALIGN_SPEED
+        car.right_pwm = config.PARK_ALIGN_SPEED
+        car.command = "PARK_ALIGN"
+        if time.time() - car.state_start_time >= config.PARK_ALIGN_DURATION:
+            print("🅿️ Positioning complete. Stopping before reverse turn...")
+            return 'PARK_STOP1'
+        return None
+
+
+class ParkStop1State(State):
+    def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
+        car.left_pwm = 0
+        car.right_pwm = 0
+        car.command = "PARK_STOP"
+        if time.time() - car.state_start_time >= config.PARK_STOP_DURATION:
+            print(f"🅿️ Reversing & turning RIGHT into slot for {config.PARK_BACK_STEER_DURATION}s...")
+            return 'PARK_BACK_STEER'
+        return None
+
+
+class ParkBackSteerState(State):
+    def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
+        car.left_pwm = config.PARK_BACK_STEER_LEFT
+        car.right_pwm = config.PARK_BACK_STEER_RIGHT
+        car.command = "PARK_BACK_STEER"
+        if time.time() - car.state_start_time >= config.PARK_BACK_STEER_DURATION:
+            print("🅿️ Reverse turn complete. Straightening into slot...")
+            return 'PARK_BACK_STRAIGHT'
+        return None
+
+
+class ParkBackStraightState(State):
+    def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
+        car.left_pwm = config.PARK_BACK_STRAIGHT
+        car.right_pwm = config.PARK_BACK_STRAIGHT
+        car.command = "PARK_BACK_STRAIGHT"
+        if time.time() - car.state_start_time >= config.PARK_BACK_STRAIGHT_DURATION:
+            print("🅿️ Right-side reverse parking completed successfully!")
+            return 'PARK_COMPLETE'
+        return None
+
+
+class ParkCompleteState(State):
+    def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
+        car.left_pwm = 0
+        car.right_pwm = 0
+        car.command = "PARKED"
+        return None
+
+
