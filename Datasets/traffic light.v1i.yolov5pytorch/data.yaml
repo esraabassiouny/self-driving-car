@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 3
+names: ['green', 'red', 'yellow']
+
+roboflow:
+  workspace: nghia123
+  project: traffic-light-nugkt
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/nghia123/traffic-light-nugkt/dataset/1

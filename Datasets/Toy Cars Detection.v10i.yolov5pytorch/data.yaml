@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['toy-car']
+
+roboflow:
+  workspace: projects-r5tdh
+  project: toy-cars-detection-lqa2y
+  version: 10
+  license: Public Domain
+  url: https://universe.roboflow.com/projects-r5tdh/toy-cars-detection-lqa2y/dataset/10
