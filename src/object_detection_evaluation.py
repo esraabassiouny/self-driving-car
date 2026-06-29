@@ -58,7 +58,7 @@ try:
     print("DETECTION TEST STARTED")
     print("========================\n")
 
-    start_sweep()   # مرة واحدة فقط
+    start_sweep()   
 
     while True:
 

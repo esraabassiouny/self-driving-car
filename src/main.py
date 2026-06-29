@@ -9,7 +9,7 @@ import numpy as np
 import time
 import os
 from datetime import datetime
-from real_lane import *
+from lane_module import *
 
 # Import our modular components
 import config
@@ -41,13 +41,13 @@ class CarController:
             'UTURN_STOP2': states.UTurnStop2State(),
             'UTURN_STEER': states.UTurnSteerState(),
             'UTURN_STOP_FINAL': states.UTurnStopFinalState(),
-            'REACH_LEFT_LANE_CENTER': states.ReachP1State(),
+            'REACH_LEFT_LANE_CENTER': states.ReachLeftLaneCenterState(),
             'FORWARD': states.ForwardState(),
             'PAUSE': states.PauseState(),
             'STEER_RIGHT': states.SteerRightState(),
             'PAUSE_AFTER_STEER': states.PauseAfterSteerState(),
             'FORWARD_AFTER_STEER': states.ForwardAfterSteerState(),
-            'REACH_RIGHT_LANE_CENTER': states.ReachP1RightState(),
+            'REACH_RIGHT_LANE_CENTER': states.ReachRightLaneCenterState(),
             'FORWARD_RIGHT': states.ForwardRightState(),
             'PAUSE_RIGHT': states.PauseRightState(),
             'STEER_LEFT_R': states.SteerLeftRState(),

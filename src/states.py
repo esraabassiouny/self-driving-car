@@ -1,6 +1,6 @@
 import time
 import config
-from real_lane import compute_steering, compute_pwm, get_command, detect_lane_end
+from lane_module import compute_steering, compute_pwm, get_command, detect_lane_end
 
 class State:
     def on_enter(self, car):
@@ -60,28 +60,44 @@ class LaneFollowState(State):
                 current_lane_blocked = car.left_lane_has_obstacle
                 other_lane_blocked = car.right_lane_has_obstacle
                 
+            nearest_distance = min(car.min_dist, car.distance)
+
             if current_lane_blocked:
-                if other_lane_blocked:
-                    # Both lanes blocked
-                    if car.min_dist <= 10.0 or car.distance <= 10.0:
-                        print(f" Both lanes blocked and distance <= 30cm (Radar: {car.min_dist:.1f}cm, Camera: {car.distance:.1f}cm)! Stopping.")
-                        return 'STOP'
-                    elif car.min_dist <= 50.0 or car.distance <= 50.0:
-                        print(f" Both lanes blocked and distance <= 60cm (Radar: {car.min_dist:.1f}cm, Camera: {car.distance:.1f}cm). Slowing down.")
-                        car.both_blocked_slow_down = True
-                else:
-                    # Lane change trigger
-                    if car.current_lane == 'RIGHT':
-                        print(f" Obstacle in RIGHT lane. LEFT lane is empty. Changing lane LEFT!")
-                        if car.min_dist <= 35.0 or car.distance <= 35.0:
-                            return 'REACH_LEFT_LANE_CENTER'
+
+                # ===============================
+                # 1. Slow down
+                # ===============================
+                if nearest_distance <= 50:
+                    car.both_blocked_slow_down = True
+                    print(f"Obstacle detected ({nearest_distance:.1f} cm). Slowing down.")
+
+                # ===============================
+                # 2. Try changing lane
+                # ===============================
+                if nearest_distance <= 35:
+
+                    if not other_lane_blocked:
+
+                        if car.current_lane == "RIGHT":
+                            print("Changing to LEFT lane.")
+                            return "REACH_LEFT_LANE_CENTER"
+
+                        else:
+                            print("Changing to RIGHT lane.")
+                            return "REACH_RIGHT_LANE_CENTER"
+
                     else:
-                        print(f" Obstacle in LEFT lane. RIGHT lane is empty. Changing lane RIGHT!")
-                        if car.min_dist <= 35.0 or car.distance <= 35.0:
-                            return 'REACH_RIGHT_LANE_CENTER'
-                        
+                        print("Other lane blocked. Continue slowly.")
+
+                # ===============================
+                # 3. Emergency stop
+                # ===============================
+                if nearest_distance <= 10:
+                    print(f"Emergency stop! Obstacle at {nearest_distance:.1f} cm.")
+                    return "STOP"
+
         # Standard Steering Control
-        if left_fit is not None or right_fit is not None:   #شششششششششششششششششششششششششششششششششششش
+        if left_fit is not None or right_fit is not None:   
             error, lane_center, car_center = compute_steering(left_fit, right_fit, left_valid, right_valid, frame.shape, 'LANE_FOLLOW')
             car.error = error
             car.lane_center = lane_center
@@ -210,7 +226,7 @@ class UTurnStopFinalState(State):
         return None
 
 
-class ReachP1State(State):
+class ReachLeftLaneCenterState(State):
     def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
         error, lane_center, car_center = compute_steering(left_fit, right_fit, left_valid, right_valid, frame.shape, 'REACH_LEFT_LANE_CENTER')
         car.error = error
@@ -218,8 +234,8 @@ class ReachP1State(State):
         car.car_center = car_center
         car.command = get_command(error)
         car.left_pwm, car.right_pwm = compute_pwm(error)
-        if time.time() - car.state_start_time >= config.P1_DURATION:
-            print(f"🎯 P1 duration reached ({config.P1_DURATION}s)! Transitioning to STATE_FORWARD.")
+        if time.time() - car.state_start_time >= config.LeftLaneCenter_DURATION:
+            print(f"🎯 LeftLaneCenter duration reached ({config.LeftLaneCenter_DURATION}s)! Transitioning to STATE_FORWARD.")
             return 'FORWARD'
         return None
 
@@ -280,7 +296,7 @@ class ForwardAfterSteerState(State):
         return None
 
 
-class ReachP1RightState(State):
+class ReachRightLaneCenterState(State):
     def update(self, car, frame, left_fit, right_fit, left_valid, right_valid, mask):
         error, lane_center, car_center = compute_steering(left_fit, right_fit, left_valid, right_valid, frame.shape, 'REACH_RIGHT_LANE_CENTER')
         car.error = error
@@ -288,8 +304,8 @@ class ReachP1RightState(State):
         car.car_center = car_center
         car.command = get_command(error)
         car.left_pwm, car.right_pwm = compute_pwm(error)
-        if time.time() - car.state_start_time >= config.P1_DURATION:
-            print(f"🎯 P1 RIGHT duration reached ({config.P1_DURATION}s)! Transitioning to STATE_FORWARD_RIGHT.")
+        if time.time() - car.state_start_time >= config.LeftLaneCenter_DURATION:
+            print(f"🎯 LeftLaneCenter RIGHT duration reached ({config.LeftLaneCenter_DURATION}s)! Transitioning to STATE_FORWARD_RIGHT.")
             return 'FORWARD_RIGHT'
         return None
 

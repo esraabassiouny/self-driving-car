@@ -247,10 +247,10 @@ def compute_steering(left_fit, right_fit, left_valid, right_valid, shape, state=
         error = lane_center - car_center
 
     elif state == 'REACH_LEFT_LANE_CENTER':
-        error = config.P1[0] - car_center
+        error = config.LeftLaneCenter[0] - car_center
 
     elif state == 'REACH_RIGHT_LANE_CENTER':
-        error = config.P1_RIGHT[0] - car_center
+        error = config.RightLaneCenter[0] - car_center
 
     elif state in ('FORWARD', 'FORWARD_AFTER_STEER', 'FORWARD_RIGHT', 'FORWARD_AFTER_STEER_RIGHT'):
         error = 0.0
@@ -354,4 +354,4 @@ def detect_lane_end(binary_img):
 
 
 if __name__ == "__main__":
-    print("real_lane.py is a module and should not be run directly.")
+    print("lane_module.py is a module and should not be run directly.")
